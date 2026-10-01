@@ -1,0 +1,9 @@
+[package]
+name = "decispec-parse"
+version = "0.1.0"
+edition = "2024"
+description = ".spec DSL parser for DecisionSpec"
+
+[dependencies]
+decispec-ir = { path = "../ir" }
+thiserror = { workspace = true }

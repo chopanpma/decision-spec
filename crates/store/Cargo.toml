@@ -1,0 +1,10 @@
+[package]
+name = "decispec-store"
+version = "0.1.0"
+edition = "2024"
+description = "DecisionSpec run history store (rusqlite)"
+
+[dependencies]
+rusqlite = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

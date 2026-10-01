@@ -1,0 +1,21 @@
+[package]
+name = "decispec"
+version = "0.1.0"
+edition = "2024"
+description = "DecisionSpec CLI: spec-driven compliance compiler and gate"
+
+[dependencies]
+decispec-ir = { path = "../ir" }
+decispec-parse = { path = "../parse" }
+decispec-codegen = { path = "../codegen" }
+decispec-extract = { path = "../extract" }
+decispec-gate = { path = "../gate" }
+decispec-store = { path = "../store" }
+clap = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+libc = { workspace = true }
+
+[[bin]]
+name = "decispec"
+path = "src/main.rs"

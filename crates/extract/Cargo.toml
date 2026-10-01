@@ -1,0 +1,12 @@
+[package]
+name = "decispec-extract"
+version = "0.1.0"
+edition = "2024"
+description = "Bootstrap draft specs from an existing Python/JS/TS project"
+
+[dependencies]
+decispec-ir = { path = "../ir" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+decispec-parse = { path = "../parse" }

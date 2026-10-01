@@ -1,0 +1,8 @@
+[package]
+name = "decispec-codegen"
+version = "0.1.0"
+edition = "2024"
+description = "DecisionSpec IR -> diagrams and per-layer test artifacts"
+
+[dependencies]
+decispec-ir = { path = "../ir" }

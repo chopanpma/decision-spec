@@ -1,0 +1,8 @@
+[package]
+name = "decispec-ir"
+version = "0.1.0"
+edition = "2024"
+description = "Typed IR of a whole DecisionSpec workspace of specs"
+
+[dependencies]
+serde = { workspace = true }

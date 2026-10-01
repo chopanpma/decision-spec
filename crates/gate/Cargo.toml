@@ -1,0 +1,12 @@
+[package]
+name = "decispec-gate"
+version = "0.1.0"
+edition = "2024"
+description = "DecisionSpec traceability matrix, JUnit consumption, verdict"
+
+[dependencies]
+decispec-ir = { path = "../ir" }
+roxmltree = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
