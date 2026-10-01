@@ -14,6 +14,7 @@
 | F13 | Reconcile ID charset: lexer vs README | crates: parse; root: README.md | — | open | Lexer (parse/src/lib.rs:239) accepts Unicode alphanumerics in IDs; README documents ASCII `[A-Za-z0-9_-]+`; extract's scrubber emits ASCII. Tighten lexer to `is_ascii_alphanumeric` (aligns all three) or amend README. |
 | F14 | Rename project → DecisionSpec / `decispec` | ALL crates; root: Cargo.lock, README.md, ARCHITECTURE.md, AGENTS.md, docs/USAGE.md, .coord/BOARD.md header | main-orchestrator (coder: agent-1) | **done** | Exclusive rename landed clean: 98 tests green, grep-zero leftovers outside the F8 audit trail, reviewer e2e smoke passed. See `.coord/reviews/F14.md`. |
 | F15 | `decispec extract` ingests ADRs into `decision` blocks | crates: extract, cli; root: README.md, docs/USAGE.md, Cargo.lock | main-orchestrator (coder: agent-1) | **done** | Landed + 1 ruling round (superseded self-ref placeholder with in-draft TODO). 106 tests green, reviewer e2e verified. See `.coord/reviews/F15.md`. |
+| F16 | `decispec mcp` — MCP server over stdio for agentic porting | crates: mcp (new), cli; root: Cargo.lock, README.md, docs/USAGE.md | main-orchestrator (coder: agent-1) | **done** | 6 tools incl. validate_spec (iterate on spec edits, file:line diagnostics) and workspace_overview (porting work queue). 114 tests green, reviewer NDJSON smoke verified. See `.coord/reviews/F16.md`. |
 
 ## Finished tasks
 

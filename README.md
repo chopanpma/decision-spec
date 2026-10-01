@@ -240,6 +240,31 @@ auth = "myapp.auth"
 # optional per-tool overrides; built-in defaults otherwise
 ```
 
+## Using with AI agents (MCP)
+
+`decispec mcp` serves an MCP server over stdio (newline-delimited JSON-RPC
+2.0) so AI agents can call typed tools instead of parsing CLI output — built
+for porting projects into DecisionSpec. Configure it in your agent's MCP
+config:
+
+```json
+{"mcpServers": {"decispec": {"command": "decispec", "args": ["mcp"]}}}
+```
+
+The server resolves the project root from its working directory at
+`initialize` (walking up for `decispec.toml`), so point the agent's `cwd` at
+the project you are porting; every tool also accepts an optional `path`
+argument to override the root per call.
+
+| Tool | Returns |
+| --- | --- |
+| `project_info` | Project root, config (name, stack lang, glue module, fitness packages), and spec/generated file counts. |
+| `extract_project` | A bootstrap analysis of an existing Python/JS/TS project: containers, import-graph relationships, ADR decisions, plus the rendered draft spec and fitness TOML. |
+| `validate_spec` | `file:line` diagnostics for one `.spec` text without touching the filesystem — the iterate-before-you-write tool. |
+| `check_workspace` | Diagnostics and counts for every `specs/**/*.spec` file (structured `decispec check`). |
+| `workspace_overview` | The porting work queue: decisions with requirements/layers/scenarios, plus gaps (accepted/proposed decisions without requirements, requirements without scenarios, superseded self-references). |
+| `gate_status` | The last gate's verdict, counts, and failing/uncovered/skipped rows from `.decispec/report.json`, or an explicit "no report yet" result. |
+
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the pattern diagram and notes.

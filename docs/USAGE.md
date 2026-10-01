@@ -145,7 +145,23 @@ hacking locally.
 - `--json` emits `.decispec/report.json`; every run is recorded in
   `.decispec/decispec.db` (`decispec query` reads it).
 
-## 8. Troubleshooting
+## 8. AI agents (MCP)
+
+`decispec mcp` exposes DecisionSpec to AI agents as an MCP server over stdio
+— typed tools instead of parsed CLI text. Setup and the full tool table live
+in [README.md](README.md#using-with-ai-agents-mcp); the short version:
+
+```json
+{"mcpServers": {"decispec": {"command": "decispec", "args": ["mcp"]}}}
+```
+
+Point the agent's `cwd` at the project you are porting (or pass `path` per
+call). Tools: `project_info`, `extract_project` (bootstrap a draft from an
+existing project), `validate_spec` (file:line diagnostics for a spec text
+before you write it), `check_workspace`, `workspace_overview` (the porting
+work queue), `gate_status`.
+
+## 9. Troubleshooting
 
 - **gate exits 2 right after editing specs** → run `decispec check`; it prints
   `file:line` diagnostics. (check = findings/1; gen/gate = abort/2.)

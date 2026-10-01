@@ -10,6 +10,7 @@ decispec-parse = { path = "../parse" }
 decispec-codegen = { path = "../codegen" }
 decispec-extract = { path = "../extract" }
 decispec-gate = { path = "../gate" }
+decispec-mcp = { path = "../mcp" }
 decispec-store = { path = "../store" }
 clap = { workspace = true }
 serde_json = { workspace = true }

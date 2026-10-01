@@ -86,6 +86,8 @@ enum CommandKind {
         #[arg(long)]
         stdout: bool,
     },
+    /// Serve MCP over stdio (NDJSON JSON-RPC 2.0) for AI agents
+    Mcp,
 }
 
 // ---------------------------------------------------------------------------
@@ -1368,6 +1370,17 @@ fn cmd_extract(root: &Path, stdout: bool) -> CliResult<ExitCode> {
 }
 
 // ---------------------------------------------------------------------------
+// mcp
+// ---------------------------------------------------------------------------
+
+/// Run the MCP server over stdio until EOF. Blocking by design — this
+/// command IS the agent connection.
+fn cmd_mcp() -> CliResult<ExitCode> {
+    decispec_mcp::serve()?;
+    Ok(ExitCode::from(EXIT_OK))
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -1411,6 +1424,7 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
             };
             cmd_extract(&root, stdout)
         }
+        CommandKind::Mcp => cmd_mcp(),
     }
 }
 
@@ -1943,6 +1957,14 @@ spec AUTH-001 {
         assert_eq!(cmd_check(&root).unwrap(), ExitCode::from(EXIT_OK));
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn mcp_subcommand_parses_and_dispatches() {
+        // The stdio loop itself is covered by decispec-mcp's Cursor tests;
+        // running cmd_mcp here would block on the test harness's stdin.
+        let cli = Cli::try_parse_from(["decispec", "mcp"]).unwrap();
+        assert!(matches!(cli.command, CommandKind::Mcp));
     }
 
     #[test]

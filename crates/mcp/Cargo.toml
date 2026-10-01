@@ -1,0 +1,11 @@
+[package]
+name = "decispec-mcp"
+version = "0.1.0"
+edition = "2024"
+description = "MCP server (stdio) exposing DecisionSpec tools to AI agents"
+
+[dependencies]
+decispec-extract = { path = "../extract" }
+decispec-parse = { path = "../parse" }
+serde = { workspace = true }
+serde_json = { workspace = true }

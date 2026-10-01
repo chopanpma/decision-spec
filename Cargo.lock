@@ -141,6 +141,7 @@ dependencies = [
  "decispec-extract",
  "decispec-gate",
  "decispec-ir",
+ "decispec-mcp",
  "decispec-parse",
  "decispec-store",
  "libc",
@@ -180,6 +181,16 @@ name = "decispec-ir"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "decispec-mcp"
+version = "0.1.0"
+dependencies = [
+ "decispec-extract",
+ "decispec-parse",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

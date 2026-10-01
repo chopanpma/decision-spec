@@ -75,6 +75,29 @@ Use the coordination protocol (`AGENTS.md` §2): one claim per project on
 always a different agent than the author. The DecisionSpec repo's own
 `.coord/` history (F8, F14, F15) is a worked example of the flow.
 
+## Agent tooling: the MCP server
+
+Agents porting a project should use `decispec mcp` (MCP over stdio) instead
+of shelling out — typed tools, structured errors, no path/exit-code plumbing:
+
+```json
+{ "mcpServers": { "decispec": { "command": "decispec", "args": ["mcp"], "cwd": "/path/to/project" } } }
+```
+
+The tools that matter for porting:
+
+| Tool | Use in the port |
+| --- | --- |
+| `validate_spec` | Iterate on a proposed requirement/scenario block — file:line diagnostics, nothing written to disk until it's valid |
+| `workspace_overview` | The work queue: decisions without requirements, requirements without scenarios, unfixed superseded TODOs |
+| `extract_project` | Re-bootstrap or compare code reality against committed specs |
+| `check_workspace` / `gate_status` | Progress checks after edits / last gate verdict |
+
+Recommended agent loop per decision: read the decision + code → draft
+requirement text → `validate_spec` → human review → apply to `specs/*.spec`
+→ `check_workspace`. Full tool list and schemas: `tools/list` against the
+server, or README's MCP section.
+
 ## Verifying a port is complete
 
 `decispec query <ID>` per decision: requirements exist, layers map to
