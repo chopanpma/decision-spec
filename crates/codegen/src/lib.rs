@@ -142,6 +142,17 @@ fn render_plantuml_steps(steps: &[FlowStep], depth: usize, out: &mut String) {
     }
 }
 
+/// Mermaid flowchart edge labels (`-->|label|`) cannot contain `(` or `)`
+/// (a paren anywhere in one label is a diagram-wide syntax error — verified
+/// against mermaid.ink) or `|` (terminates the label early). Render the
+/// paren entities and a slash for the pipe; the IR keeps the raw strings.
+fn mermaid_edge_label(label: &str) -> String {
+    label
+        .replace('|', "/")
+        .replace('(', "&#40;")
+        .replace(')', "&#41;")
+}
+
 pub fn mermaid_model(ws: &Workspace) -> String {
     let mut out = String::from("flowchart LR\n");
     for m in &ws.models {
@@ -150,7 +161,12 @@ pub fn mermaid_model(ws: &Workspace) -> String {
         }
     }
     for rel in ws.all_rels() {
-        out.push_str(&format!("    {} -->|{}| {}\n", rel.from, rel.label, rel.to));
+        out.push_str(&format!(
+            "    {} -->|{}| {}\n",
+            rel.from,
+            mermaid_edge_label(&rel.label),
+            rel.to
+        ));
     }
     out
 }
@@ -836,6 +852,64 @@ mod tests {
             .expect("model.puml missing");
         assert!(puml.content.contains("[Orders API] as api"));
         assert!(puml.content.contains("api --> auth : requests token"));
+    }
+
+    // F19: rel labels with parens break Mermaid flowchart parsing (verified
+    // against mermaid.ink: raw parens -> HTTP 400, &#40;/&#41; -> 200); a raw
+    // `|` would terminate the edge label early. PlantUML is unaffected.
+    fn model_with_rel(label: &str) -> decispec_ir::Workspace {
+        let mut ws = decispec_ir::Workspace::default();
+        ws.models.push(decispec_ir::Model {
+            containers: vec![
+                decispec_ir::Container {
+                    id: "api".to_string(),
+                    label: "API".to_string(),
+                },
+                decispec_ir::Container {
+                    id: "db".to_string(),
+                    label: "DB".to_string(),
+                },
+            ],
+            rels: vec![decispec_ir::Rel {
+                from: "api".to_string(),
+                to: "db".to_string(),
+                label: label.to_string(),
+            }],
+            flows: vec![],
+            file: "specs/x.spec".to_string(),
+        });
+        ws
+    }
+
+    #[test]
+    fn mermaid_edge_labels_escape_parens() {
+        let ws = model_with_rel("queries (api, application)");
+        let mmd = mermaid_model(&ws);
+        assert!(
+            mmd.contains("api -->|queries &#40;api, application&#41;| db"),
+            "{mmd}"
+        );
+        assert!(
+            !mmd.contains("-->|queries ("),
+            "raw parens in the edge label break Mermaid parsing:\n{mmd}"
+        );
+    }
+
+    #[test]
+    fn mermaid_edge_labels_replace_pipe() {
+        let ws = model_with_rel("a | b");
+        let mmd = mermaid_model(&ws);
+        assert!(mmd.contains("-->|a / b| db"), "{mmd}");
+    }
+
+    #[test]
+    fn plantuml_edge_labels_keep_raw_parens() {
+        let ws = model_with_rel("queries (api, application)");
+        let puml = plantuml_model(&ws);
+        assert!(
+            puml.contains("api --> db : queries (api, application)"),
+            "{puml}"
+        );
     }
 
     #[test]
