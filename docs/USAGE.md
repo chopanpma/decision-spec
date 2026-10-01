@@ -29,14 +29,17 @@ Already-started Python/JavaScript/TypeScript project:
 
 ```sh
 decispec init
-decispec extract        # drafts specs/extracted.spec from your layout + imports
-# edit the draft: name containers, add decisions/requirements
+decispec extract        # drafts specs/extracted.spec from layout + imports + ADRs
+# edit the draft: name containers, add requirements (decisions may already be there)
 ```
 
 `extract` recovers structure — containers from top-level directories (or the
 children of a single umbrella dir that holds the code, like `src/` or your
 main package), import relationships, and suggested fitness module mappings —
-not intent. Decisions and requirements are yours to write.
+plus decisions already written as ADR markdown docs (`docs/adr/`,
+`docs/decisions/`, `adr/`, `decisions/`), which become `decision` blocks
+(each with a `# Source:` comment; title/status/context/consequences only).
+It does not recover intent: requirements and scenarios are yours to write.
 
 ## 3. The daily loop
 

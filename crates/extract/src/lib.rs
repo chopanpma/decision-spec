@@ -36,7 +36,29 @@ pub struct Extracted {
     pub containers: Vec<ContainerInfo>,
     /// (from_id, to_id) import edges, sorted + deduped, no self-edges.
     pub relationships: Vec<(String, String)>,
+    /// Decisions recovered from ADR markdown docs, sorted by source path.
+    /// Requirements/scenarios are never inferred.
+    pub decisions: Vec<ExtractedDecision>,
     pub warnings: Vec<String>,
+}
+
+/// A decision recovered from an ADR/markdown decision doc. Only explicitly
+/// written facts are extracted (title/status/context/consequences);
+/// requirements and `superseded_by` targets are never inferred.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedDecision {
+    pub id: String,
+    pub title: String,
+    /// DSL status word: proposed | accepted | superseded | rejected
+    /// (an ADR `deprecated` maps to `superseded`).
+    pub status: String,
+    /// Flattened single-line text of the `## Context` section (<= 500 chars
+    /// + ellipsis), if the section exists.
+    pub context: Option<String>,
+    /// Same for `## Consequences`.
+    pub consequences: Option<String>,
+    /// Root-relative path of the ADR file, for the `# Source:` comment.
+    pub source: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -361,6 +383,41 @@ pub fn analyze(root: &Path, exclude: &[PathBuf]) -> Result<Extracted, ExtractErr
         }
     }
 
+    // -- ADR ingestion -------------------------------------------------------
+
+    let mut decisions: Vec<ExtractedDecision> = Vec::new();
+    let mut skipped_no_title = 0usize;
+    let mut missing_status = 0usize;
+    for (rel, text) in scan_adrs(root, exclude)? {
+        let Some(title) = adr_title(&text) else {
+            skipped_no_title += 1;
+            continue;
+        };
+        let base = adr_id_base(&rel);
+        let mut id = base.clone();
+        let mut n = 2;
+        while !used.insert(id.clone()) {
+            id = format!("{base}_{n}");
+            n += 1;
+        }
+        let status = match adr_status(&text) {
+            Some("deprecated") => "superseded".to_string(),
+            Some(s) => s.to_string(),
+            None => {
+                missing_status += 1;
+                "proposed".to_string()
+            }
+        };
+        decisions.push(ExtractedDecision {
+            id,
+            title,
+            status,
+            context: adr_section(&text, "context"),
+            consequences: adr_section(&text, "consequences"),
+            source: rel.to_string_lossy().replace('\\', "/"),
+        });
+    }
+
     let mut warnings = Vec::new();
     if unmapped > 0 {
         warnings.push(format!("{unmapped} imports did not map to any container"));
@@ -371,6 +428,14 @@ pub fn analyze(root: &Path, exclude: &[PathBuf]) -> Result<Extracted, ExtractErr
             containers.len()
         ));
     }
+    if skipped_no_title > 0 {
+        warnings.push(format!("{skipped_no_title} ADR file(s) skipped (no # title)"));
+    }
+    if missing_status > 0 {
+        warnings.push(format!(
+            "{missing_status} ADR(s) missing status (defaulted to proposed)"
+        ));
+    }
 
     let relationships: Vec<(String, String)> =
         edges.into_iter().filter(|(from, to)| from != to).collect();
@@ -379,17 +444,43 @@ pub fn analyze(root: &Path, exclude: &[PathBuf]) -> Result<Extracted, ExtractErr
         project_name,
         containers,
         relationships,
+        decisions,
         warnings,
     })
 }
 
-/// Render the draft `.spec` text (a `model` block + review header).
+/// Render the draft `.spec` text: recovered decisions first (each with its
+/// `# Source:` comment), then the `model` block, then the review header.
 pub fn render_spec(extracted: &Extracted) -> String {
     let mut out = String::new();
     out.push_str(
-        "# DRAFT from `decispec extract` — containers = top-level dirs, rels = import graph.\n",
+        "# DRAFT from `decispec extract` — decisions from ADR docs, containers = top-level dirs, rels = import graph.\n",
     );
-    out.push_str("# Review container names, then add decisions + requirements. Delete this header.\n");
+    out.push_str("# Review names, then add requirements (never inferred). Delete this header.\n");
+    for d in &extracted.decisions {
+        out.push_str(&format!("# Source: {}\n", d.source));
+        out.push_str(&format!("decision {} \"{}\" {{\n", d.id, escape_title(&d.title)));
+        out.push_str(&format!("  status: {}\n", d.status));
+        // The DSL requires a superseded_by target for status superseded; the
+        // real target is not written in the ADR, so point at the decision
+        // itself to keep the draft valid and flag the gap for review.
+        if d.status == "superseded" {
+            out.push_str(
+                "  # TODO: status was \"superseded\"/\"deprecated\" in the ADR; no successor determinable.\n",
+            );
+            out.push_str(
+                "  # Point superseded_by at the real successor ID, then delete these comment lines.\n",
+            );
+            out.push_str(&format!("  superseded_by: {}\n", d.id));
+        }
+        if let Some(ctx) = &d.context {
+            out.push_str(&format!("  context: \"{}\"\n", escape_title(ctx)));
+        }
+        if let Some(cons) = &d.consequences {
+            out.push_str(&format!("  consequences: \"{}\"\n", escape_title(cons)));
+        }
+        out.push_str("}\n");
+    }
     out.push_str("model {\n");
     for c in &extracted.containers {
         out.push_str(&format!(
@@ -516,6 +607,210 @@ fn js_owner(target: &Path, by_path: &[(PathBuf, String)], loose: Option<&str>) -
     match best {
         Some(b) => Some(b.1.clone()),
         None => loose.map(str::to_string),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ADR ingestion (F15): markdown decision docs -> decision blocks
+// ---------------------------------------------------------------------------
+
+/// Canonical ADR locations, resolved root-relative, case-insensitively.
+const ADR_PATTERNS: [&[&str]; 4] = [
+    &["adr"],
+    &["decisions"],
+    &["docs", "adr"],
+    &["docs", "decisions"],
+];
+
+/// Read every `*.md` under the canonical ADR dirs (recursively, skipping
+/// noise + excluded paths), as (root-relative path, text) sorted by path.
+fn scan_adrs(root: &Path, exclude: &[PathBuf]) -> Result<Vec<(PathBuf, String)>, ExtractError> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    for pattern in ADR_PATTERNS {
+        let mut abs = root.to_path_buf();
+        let mut ok = true;
+        for comp in pattern {
+            match resolve_dir_ci(&abs, comp) {
+                Some(a) => abs = a,
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            collect_adrs(&abs, root, exclude, &mut found)?;
+        }
+    }
+    found.sort();
+    let mut out = Vec::new();
+    for rel in found {
+        let abs = root.join(&rel);
+        let text = std::fs::read_to_string(&abs).map_err(|e| ExtractError::Io(e, abs))?;
+        out.push((rel, text));
+    }
+    Ok(out)
+}
+
+/// Find `wanted` (case-insensitive) among `dir`'s subdirectories.
+fn resolve_dir_ci(dir: &Path, wanted: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let name_match = entry.file_name().to_str().is_some_and(|n| n.eq_ignore_ascii_case(wanted));
+        if name_match && entry.file_type().is_ok_and(|t| t.is_dir()) {
+            return Some(entry.path());
+        }
+    }
+    None
+}
+
+/// Recursively collect `*.md` files under `dir_abs` as root-relative paths.
+fn collect_adrs(
+    dir_abs: &Path,
+    root: &Path,
+    exclude: &[PathBuf],
+    out: &mut Vec<PathBuf>,
+) -> Result<(), ExtractError> {
+    let entries =
+        std::fs::read_dir(dir_abs).map_err(|e| ExtractError::Io(e, dir_abs.to_path_buf()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| ExtractError::Io(e, dir_abs.to_path_buf()))?;
+        let path = entry.path();
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_path_buf();
+        if exclude
+            .iter()
+            .any(|e| !e.as_os_str().is_empty() && rel.starts_with(e))
+        {
+            continue;
+        }
+        let ft = entry
+            .file_type()
+            .map_err(|e| ExtractError::Io(e, path.clone()))?;
+        if ft.is_dir() {
+            if is_noise(&entry.file_name()) {
+                continue;
+            }
+            collect_adrs(&path, root, exclude, out)?;
+        } else if ft.is_file() && path.extension().is_some_and(|e| e == "md") {
+            out.push(rel);
+        }
+    }
+    Ok(())
+}
+
+/// Title = text of the first `#` heading; `None` when there is none.
+fn adr_title(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("# ") {
+            let title = rest.trim();
+            return if title.is_empty() { None } else { Some(title.to_string()) };
+        }
+        if t.starts_with("##") {
+            break; // reached section headings without ever seeing a title
+        }
+    }
+    None
+}
+
+/// ID base: `ADR-<n>` for a numeric filename prefix (`0001-foo.md`,
+/// `0001.md`), else an uppercase, charset-safe slug of the stem.
+fn adr_id_base(rel: &Path) -> String {
+    let stem = rel.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
+    let digits: String = stem.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !digits.is_empty() {
+        format!("ADR-{digits}")
+    } else {
+        stem.split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("-")
+            .to_uppercase()
+    }
+}
+
+const ADR_STATUSES: [&str; 5] = ["proposed", "accepted", "deprecated", "superseded", "rejected"];
+
+/// First whitespace token of `s`, stripped of surrounding punctuation,
+/// matched against the DSL status words.
+fn first_status_word(s: &str) -> Option<&'static str> {
+    let token: String = s.chars().take_while(|c| !c.is_whitespace()).collect();
+    let token = token.trim_matches(|c: char| c.is_ascii_punctuation());
+    ADR_STATUSES
+        .iter()
+        .find(|w| token.eq_ignore_ascii_case(w))
+        .copied()
+}
+
+/// Status from a MADR `## Status` section (first status word on the next
+/// non-empty line) or an inline `Status:` / `**Status:**` line.
+fn adr_status(text: &str) -> Option<&'static str> {
+    let lines: Vec<&str> = text.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim().eq_ignore_ascii_case("## status") {
+            for next in &lines[i + 1..] {
+                let n = next.trim();
+                if n.is_empty() {
+                    continue;
+                }
+                if let Some(w) = first_status_word(n) {
+                    return Some(w);
+                }
+                break;
+            }
+            break;
+        }
+    }
+    for line in &lines {
+        let t = line.trim();
+        let rest = t
+            .strip_prefix("**Status:**")
+            .or_else(|| t.strip_prefix("**status:**"))
+            .or_else(|| t.strip_prefix("Status:"))
+            .or_else(|| t.strip_prefix("status:"));
+        if let Some(rest) = rest
+            && let Some(w) = first_status_word(rest.trim())
+        {
+            return Some(w);
+        }
+    }
+    None
+}
+
+/// Flattened single-line text of a `## <name>` section (stops at the next
+/// heading), capped at 500 chars + an ellipsis. `None` if the section is
+/// absent or empty.
+fn adr_section(text: &str, name: &str) -> Option<String> {
+    let mut in_section = false;
+    let mut parts: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with('#') {
+            let heading = t.trim_start_matches('#').trim();
+            if in_section {
+                break; // any next heading ends the section
+            }
+            if heading.eq_ignore_ascii_case(name) {
+                in_section = true;
+            }
+            continue;
+        }
+        if in_section && !t.is_empty() {
+            parts.push(t);
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let flat = parts.join(" ");
+    let flat: String = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() > 500 {
+        Some(format!("{}…", flat.chars().take(500).collect::<String>()))
+    } else {
+        Some(flat)
     }
 }
 
@@ -1335,6 +1630,243 @@ mod tests {
             toml.contains("api = \"my_shop.api\"\n"),
             "hyphenated package value must be sanitized:\n{toml}"
         );
+
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    // -- ADR ingestion (F15) ---------------------------------------------------
+
+    fn adr_project(name: &str) -> PathBuf {
+        // Every fixture needs at least one source file or analyze bails with
+        // NoSourceFiles; ADR-only projects are not a supported input.
+        let root = temp_project(name);
+        write(&root, "pkg/mod.py", "");
+        root
+    }
+
+    // 1. MADR fixture: full field mapping.
+    #[test]
+    fn adr_madr_fixture_maps_fields() {
+        let root = adr_project("adrproj");
+        write(
+            &root,
+            "docs/adr/0001-use-postgres.md",
+            "# Use Postgres for persistence\n\n## Status\n\nAccepted\n\n## Context\nWe need a durable store.\nIt must survive restarts.\n\n## Consequences\nOperational overhead of a new service.\n",
+        );
+        write(
+            &root,
+            "docs/adr/0002-cache.md",
+            "# Add Redis caching\n\n## Status\nProposed\n",
+        );
+
+        let ex = analyze(&root, &[]).unwrap();
+        assert_eq!(ex.decisions.len(), 2);
+        let d1 = &ex.decisions[0];
+        assert_eq!(d1.id, "ADR-0001");
+        assert_eq!(d1.title, "Use Postgres for persistence");
+        assert_eq!(d1.status, "accepted");
+        assert_eq!(
+            d1.context.as_deref(),
+            Some("We need a durable store. It must survive restarts.")
+        );
+        assert_eq!(
+            d1.consequences.as_deref(),
+            Some("Operational overhead of a new service.")
+        );
+        assert_eq!(d1.source, "docs/adr/0001-use-postgres.md");
+        let d2 = &ex.decisions[1];
+        assert_eq!(d2.id, "ADR-0002");
+        assert_eq!(d2.status, "proposed");
+        assert_eq!(d2.context, None);
+        assert_eq!(d2.consequences, None);
+
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    // 2. adr-tools style (`## Status` + blank line) and inline status lines;
+    //    deprecated maps to superseded.
+    #[test]
+    fn adr_status_from_heading_and_inline_line() {
+        let root = adr_project("adrstatus");
+        write(&root, "docs/adr/0003.md", "# Plain numbered ADR\n\n## Status\n\nAccepted\n");
+        write(
+            &root,
+            "docs/adr/0004.md",
+            "# Inline status ADR\n\nSome prose first.\n\n**Status:** deprecated\n",
+        );
+
+        let ex = analyze(&root, &[]).unwrap();
+        assert_eq!(ex.decisions.len(), 2);
+        assert_eq!(ex.decisions[0].id, "ADR-0003");
+        assert_eq!(ex.decisions[0].status, "accepted");
+        assert_eq!(ex.decisions[1].id, "ADR-0004");
+        assert_eq!(ex.decisions[1].status, "superseded");
+        assert!(ex.warnings.is_empty(), "warnings: {:?}", ex.warnings);
+
+        // A deprecated->superseded ADR renders a self superseded_by: the DSL
+        // requires a target for status superseded and the real target is not
+        // written in the ADR, so the draft stays valid while flagging the
+        // gap for human review. The self-reference must be marked as a
+        // placeholder by TODO comments directly above it, and only there.
+        let text = render_spec(&ex);
+        assert!(
+            text.contains("  superseded_by: ADR-0004\n"),
+            "superseded needs a target to stay valid:\n{text}"
+        );
+        let todo_pos = text
+            .find("# TODO: status was \"superseded\"/\"deprecated\"")
+            .expect("placeholder TODO comment missing:\n{text}");
+        let sup_pos = text.find("  superseded_by: ADR-0004\n").unwrap();
+        assert!(
+            todo_pos < sup_pos,
+            "TODO comment must precede the superseded_by line:\n{text}"
+        );
+        assert_eq!(
+            text.matches("# TODO: status was \"superseded\"/\"deprecated\"").count(),
+            1,
+            "TODO comment only for the self-reference case:\n{text}"
+        );
+        let unit = decispec_parse::parse_file("extracted.spec", &text).unwrap();
+        let ws = decispec_parse::merge(vec![unit]);
+        assert!(
+            decispec_parse::validate(&ws).is_empty(),
+            "{:?}",
+            decispec_parse::validate(&ws)
+        );
+
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    // 3. Non-numeric filenames become scrubbed uppercase slugs; slugs that
+    //    clash (even after scrubbing) get collision suffixes.
+    #[test]
+    fn adr_slug_ids_scrubbed_and_collision_suffixed() {
+        let root = adr_project("adrslug");
+        write(&root, "docs/decisions/use-uuid-pks.md", "# Use UUID PKs\n");
+        write(&root, "docs/decisions/use.uuid.pks.md", "# Also UUID PKs\n");
+        write(&root, "docs/decisions/weird name!.md", "# Weird name\n");
+
+        let ex = analyze(&root, &[]).unwrap();
+        let ids: Vec<&str> = ex.decisions.iter().map(|d| d.id.as_str()).collect();
+        // Sorted by source path: use-uuid-pks.md < use.uuid.pks.md < weird name!.md
+        assert_eq!(ids, vec!["USE-UUID-PKS", "USE-UUID-PKS_2", "WEIRD-NAME"]);
+
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    // 4. Missing title -> file skipped + warning; missing status -> proposed
+    //    + warning.
+    #[test]
+    fn adr_missing_title_skipped_and_missing_status_warns() {
+        let root = adr_project("adrskip");
+        write(&root, "docs/adr/0005-no-title.md", "## Status\nAccepted\n");
+        write(&root, "docs/adr/0006-no-status.md", "# Has a title only\n\nSome prose.\n");
+
+        let ex = analyze(&root, &[]).unwrap();
+        assert_eq!(ex.decisions.len(), 1, "0005 must be skipped");
+        assert_eq!(ex.decisions[0].id, "ADR-0006");
+        assert_eq!(ex.decisions[0].status, "proposed");
+        assert!(
+            ex.warnings
+                .iter()
+                .any(|w| w == "1 ADR file(s) skipped (no # title)"),
+            "warnings: {:?}",
+            ex.warnings
+        );
+        assert!(
+            ex.warnings
+                .iter()
+                .any(|w| w == "1 ADR(s) missing status (defaulted to proposed)"),
+            "warnings: {:?}",
+            ex.warnings
+        );
+
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    // 5. Long/multi-line context flattened to <=500 chars + ellipsis; ADR ids
+    //    share the used set with container ids (a single-word slug collides
+    //    with a same-named dir — numeric `ADR-000n` ids keep their dash and
+    //    cannot collide because container ids are dash-free); draft
+    //    round-trips.
+    #[test]
+    fn adr_long_context_flattened_and_id_collision_with_container() {
+        let root = adr_project("adrcollision");
+        write(&root, "POSTGRES/x.py", "");
+        write(&root, "lib/y.py", "");
+        let long_context = format!(
+            "{} {}",
+            "lorem ipsum dolor sit amet".repeat(20),
+            "consectetur adipiscing elit".repeat(20),
+        );
+        write(
+            &root,
+            "docs/decisions/postgres.md",
+            &format!("# Postgres\n\n## Status\nAccepted\n\n## Context\n{long_context}\n"),
+        );
+
+        let ex = analyze(&root, &[]).unwrap();
+        // The container dir `postgres` was assigned first and keeps the bare
+        // id; the decision slug collides and gets the suffix.
+        assert!(ex.containers.iter().any(|c| c.id == "POSTGRES"));
+        assert_eq!(ex.decisions.len(), 1);
+        assert_eq!(ex.decisions[0].id, "POSTGRES_2");
+        let ctx = ex.decisions[0].context.clone().unwrap();
+        assert!(!ctx.contains('\n'), "context must be single-line");
+        assert!(ctx.ends_with('…'), "context must be capped: {ctx:?}");
+        assert_eq!(ctx.chars().count(), 501, "500 chars + ellipsis");
+
+        let text = render_spec(&ex);
+        let unit =
+            decispec_parse::parse_file("extracted.spec", &text).expect("draft must parse");
+        let ws = decispec_parse::merge(vec![unit]);
+        assert!(
+            decispec_parse::validate(&ws).is_empty(),
+            "{:?}",
+            decispec_parse::validate(&ws)
+        );
+        assert_eq!(ws.decisions.len(), 1);
+        assert_eq!(ws.models[0].containers.len(), 3);
+
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    // 6. Excluded dirs must not contribute ADRs either.
+    #[test]
+    fn adr_excluded_dir_contributes_nothing() {
+        let root = adr_project("adrexcl");
+        write(&root, "docs/adr/0001-visible.md", "# Visible\n\n## Status\nAccepted\n");
+        write(
+            &root,
+            "docs/adr/archive/0002-old.md",
+            "# Old\n\n## Status\nAccepted\n",
+        );
+
+        let ex = analyze(&root, &[PathBuf::from("docs/adr/archive")]).unwrap();
+        assert_eq!(ex.decisions.len(), 1);
+        assert_eq!(ex.decisions[0].id, "ADR-0001");
+
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    // 7. Case-insensitive ADR dir names; decisions render before the model
+    //    block with a `# Source:` comment.
+    #[test]
+    fn adr_case_insensitive_dirs_and_render_order() {
+        let root = adr_project("adrcase");
+        write(&root, "ADR/0007.md", "# Root-level adr dir\n\n## Status\nRejected\n");
+
+        let ex = analyze(&root, &[]).unwrap();
+        assert_eq!(ex.decisions.len(), 1);
+        assert_eq!(ex.decisions[0].id, "ADR-0007");
+        assert_eq!(ex.decisions[0].status, "rejected");
+
+        let text = render_spec(&ex);
+        let source_pos = text.find("# Source: ADR/0007.md").expect("source comment");
+        let decision_pos = text.find("decision ADR-0007 \"Root-level adr dir\" {").unwrap();
+        let model_pos = text.find("model {").unwrap();
+        assert!(source_pos < decision_pos && decision_pos < model_pos);
+        assert!(text.contains("  status: rejected\n"));
 
         std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
     }

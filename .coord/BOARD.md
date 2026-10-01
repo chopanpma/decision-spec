@@ -13,6 +13,7 @@
 | F11 | Implement or cut `[runners]` per-tool overrides | crates: cli; root: README.md | — | open | Documented (README:227) and written by init as a comment, but parse_config ignores it and run_adapters hardcodes invocations. Pick one: wire it through, or delete the docs+comment. |
 | F13 | Reconcile ID charset: lexer vs README | crates: parse; root: README.md | — | open | Lexer (parse/src/lib.rs:239) accepts Unicode alphanumerics in IDs; README documents ASCII `[A-Za-z0-9_-]+`; extract's scrubber emits ASCII. Tighten lexer to `is_ascii_alphanumeric` (aligns all three) or amend README. |
 | F14 | Rename project → DecisionSpec / `decispec` | ALL crates; root: Cargo.lock, README.md, ARCHITECTURE.md, AGENTS.md, docs/USAGE.md, .coord/BOARD.md header | main-orchestrator (coder: agent-1) | **done** | Exclusive rename landed clean: 98 tests green, grep-zero leftovers outside the F8 audit trail, reviewer e2e smoke passed. See `.coord/reviews/F14.md`. |
+| F15 | `decispec extract` ingests ADRs into `decision` blocks | crates: extract, cli; root: README.md, docs/USAGE.md, Cargo.lock | main-orchestrator (coder: agent-1) | **done** | Landed + 1 ruling round (superseded self-ref placeholder with in-draft TODO). 106 tests green, reviewer e2e verified. See `.coord/reviews/F15.md`. |
 
 ## Finished tasks
 

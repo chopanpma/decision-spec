@@ -163,4 +163,10 @@ holds the code (`src/`, the main package) — from its children; DecisionSpec's 
 scaffold (glue dir, `tests/generated`) is excluded from analysis; container
 ids are scrubbed to the ASCII ID grammar before collision-suffixing; the
 acceptance test round-trips the draft through the real parser + validator.
-New `crates/extract` library, wired in `cli` (see diagram above).
+New `crates/extract` library, wired in `cli` (see diagram above). Extended by
+**F15 (2026-10-01)**: ADR/markdown decision docs are ingested into `decision`
+blocks (id from filename number or slug; title/status/context/consequences;
+deprecated→superseded with a self-referenced `superseded_by` TODO placeholder
+when no successor is determinable). Extraction stays deterministic —
+requirements and `superseded_by` targets are never inferred; the agent/human
+workflow for that layer is `docs/PORTING.md`.

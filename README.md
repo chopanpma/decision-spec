@@ -137,7 +137,7 @@ Semantics:
 | `decispec test` | Run installed toolchains, collect JUnit XML + write `tests/generated/results/manifest.json`. Skipped (toolchain not installed) is **not** a failure; exit 1 only if an executed toolchain failed. |
 | `decispec gate [--json] [--results <dir>] [--strict-skipped]` | Build the matrix + verdict. Without `--results` it first runs the adapters; with `--results` it consumes JUnit XML from that dir. `--strict-skipped` escalates `SKIPPED` rows to `FAIL` (see [Gate semantics](#gate-semantics)). Always writes `.decispec/report.json` and records the run in `.decispec/decispec.db`. Exit 0 = verdict PASS, 1 = verdict FAIL **and nothing else** (specs that fail to parse/validate exit 2, since the gate could not be built at all), 2 = could not complete (bad CLI usage, unparseable specs, missing `--results` dir, I/O or engine errors). |
 | `decispec query <ID>` | Print the decision subtree (fields, model/flows, requirements/scenarios/invariants/policies with layers + artifact paths, last gate status from the store). Accepts decision, requirement, scenario, invariant and policy IDs. |
-| `decispec extract [path] [--stdout]` | Bootstrap a draft spec from an already-started Python/JS/TS project: containers from top-level directories — or from the children of a single umbrella directory that holds the code (`src/`, your main package) — relationships from the import graph, plus a suggested `[stack.fitness.packages]` mapping. Writes `specs/extracted.spec` (refuses to overwrite it: exit 2 — delete it or pass `--stdout`) or prints the draft to stdout with `--stdout`. Warnings always go to stderr; the fitness TOML suggestion prints to stdout, or to stderr with `--stdout`. Recovery stops at structure: decisions and requirements are never inferred — the draft header says so. Exit 0 on success (warnings included), 2 when the tree has no source files or cannot be analyzed. |
+| `decispec extract [path] [--stdout]` | Bootstrap a draft spec from an already-started Python/JS/TS project: containers from top-level directories — or from the children of a single umbrella directory that holds the code (`src/`, your main package) — relationships from the import graph, decisions recovered from ADR markdown docs (`docs/adr/`, `docs/decisions/`, `adr/`, `decisions/`) as `decision` blocks with a `# Source:` comment each, plus a suggested `[stack.fitness.packages]` mapping. Writes `specs/extracted.spec` (refuses to overwrite it: exit 2 — delete it or pass `--stdout`) or prints the draft to stdout with `--stdout`. Warnings always go to stderr; the fitness TOML suggestion prints to stdout, or to stderr with `--stdout`. Recovery stops at structure: requirements are never inferred — the draft header says so. Exit 0 on success (warnings included), 2 when the tree has no source files or cannot be analyzed. |
 
 All commands run from anywhere inside a project; `decispec.toml` is found by
 walking up from cwd.
@@ -256,7 +256,8 @@ crates/
   codegen/   decispec-codegen  IR -> diagrams + per-layer test artifacts
                                (one pure fn per artifact type, all &Workspace -> Vec<GeneratedFile>)
   extract/   decispec-extract  bootstrap a draft spec from an existing
-                               Python/JS/TS project (layout + import graph)
+                               Python/JS/TS project (layout + import graph
+                               + ADR docs -> decision blocks)
   gate/      decispec-gate     JUnit XML (roxmltree) + run manifest -> traceability
                                matrix + verdict (pure, filesystem-in/report-out)
   store/     decispec-store    rusqlite run history (.decispec/decispec.db)

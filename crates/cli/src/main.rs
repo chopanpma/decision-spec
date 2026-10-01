@@ -1362,7 +1362,7 @@ fn cmd_extract(root: &Path, stdout: bool) -> CliResult<ExitCode> {
     }
     std::fs::write(&target, &spec_text)?;
     println!("wrote {}", target.display());
-    println!("review the draft, then add decisions + requirements");
+    println!("review the draft (decisions from ADRs + structure from code), then add requirements");
     println!("{fitness}");
     Ok(ExitCode::from(EXIT_OK))
 }
@@ -1904,6 +1904,43 @@ spec AUTH-001 {
             !text.contains("container tests"),
             "DecisionSpec scaffold leaked into the draft:\n{text}"
         );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn extract_writes_draft_with_decisions_from_adrs() {
+        let root = extract_fixture();
+        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
+        std::fs::write(
+            root.join("docs/adr/0001-use-postgres.md"),
+            "# Use Postgres\n\n## Status\nAccepted\n\n## Context\nWe need a store.\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            cmd_extract(&root, false).unwrap(),
+            ExitCode::from(EXIT_OK)
+        );
+        let text = std::fs::read_to_string(root.join("specs/extracted.spec")).unwrap();
+        assert!(
+            text.contains("# Source: docs/adr/0001-use-postgres.md"),
+            "ADR source comment missing:\n{text}"
+        );
+        assert!(
+            text.contains("decision ADR-0001 \"Use Postgres\" {"),
+            "decision block missing:\n{text}"
+        );
+        assert!(text.contains("  status: accepted\n"), "{text}");
+        assert!(text.contains("  context: \"We need a store.\"\n"), "{text}");
+        assert!(text.contains("model {\n"), "{text}");
+        // decisions render before the model block
+        assert!(
+            text.find("decision ADR-0001").unwrap() < text.find("model {").unwrap(),
+            "{text}"
+        );
+        // the draft is a valid workspace
+        assert_eq!(cmd_check(&root).unwrap(), ExitCode::from(EXIT_OK));
 
         std::fs::remove_dir_all(&root).unwrap();
     }
