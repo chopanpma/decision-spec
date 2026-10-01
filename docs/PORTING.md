@@ -24,6 +24,14 @@ decispec check           # must exit 0
 decispec gen             # diagrams + skeletons
 ```
 
+`extract` analyzes one language family per run (the majority wins). A
+full-stack repo (e.g. Python backend + TypeScript frontend) gets one run per
+subtree — `decispec extract backend`, `decispec extract frontend` — each
+writes its draft under that subtree's `specs/`; move both into the project's
+`specs/` and curate (raw drafts name top-level directories; rename the
+containers to your real architectural units and expect noise like test and
+migration dirs — see tvgo's port for a worked example).
+
 Then review the draft (`specs/extracted.spec`):
 
 - Rename containers that extracted poorly (e.g. umbrella children that need

@@ -26,7 +26,10 @@ mkdir my-project && cd my-project
 /path/to/decispec init --demo
 decispec check        # parse + validate all specs/**/*.spec
 decispec gen          # emit diagrams + test artifacts
-decispec gate         # red: glue stubs raise NotImplementedError
+decispec gate         # red: --demo glue stubs raise NotImplementedError
+                      # (plain `init` ships an empty glue package, so the
+                      # generated tests fail with AttributeError instead —
+                      # same red gate, different error shape)
 # ... implement tests/glue/__init__.py ...
 decispec gate         # green
 decispec query AUTH-001
@@ -264,6 +267,21 @@ argument to override the root per call.
 | `check_workspace` | Diagnostics and counts for every `specs/**/*.spec` file (structured `decispec check`). |
 | `workspace_overview` | The porting work queue: decisions with requirements/layers/scenarios, plus gaps (accepted/proposed decisions without requirements, requirements without scenarios, superseded self-references). |
 | `gate_status` | The last gate's verdict, counts, and failing/uncovered/skipped rows from `.decispec/report.json`, or an explicit "no report yet" result. |
+
+Two things the table doesn't tell you, learned from a real agent port
+(dogfood, 2026-10-01):
+
+- **Schemas live in `tools/list`.** The table is a summary; call
+  `tools/list` for each tool's full input schema (an agent guessed
+  `validate_spec` took `{"spec": …}` — it takes `{"text": …}`).
+- **Results are JSON inside the MCP envelope.** A `tools/call` reply wraps
+  the payload as `content: [{type: "text", text: "<json string>"}]` — the
+  `text` field needs a second `json.loads`. Failures carry `isError: true`.
+
+`validate_spec` reports diagnostics phase-by-phase: a text with both a parse
+error and a cross-reference error shows only the parse error. Fix, re-send,
+repeat until `valid: true` — the first clean answer after one fix can still
+hide a second problem behind it.
 
 ## Architecture
 
