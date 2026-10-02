@@ -245,7 +245,18 @@ api = "myapp.api"
 auth = "myapp.auth"
 
 [runners]
-# optional per-tool overrides; built-in defaults otherwise
+# optional per-tool overrides; built-in defaults otherwise. One flat key per
+# tool, value = the command to run (split on whitespace: first token is the
+# program — a root-relative path works — the rest are fixed prefix args the
+# layer-specific args append to):
+#   pytest             = "backend/.venv/bin/python -m pytest"
+#   playwright         = "npx --no-install playwright"
+#   cucumber / karate  = program name checked on PATH
+#   conftest           = program name checked on PATH
+#   import-linter      = program name checked on PATH
+#   dependency-cruiser = program name checked on PATH
+# A missing or failing tool is SKIPPED, never fatal: `decispec test` always
+# completes and writes the manifest.
 ```
 
 ## Using with AI agents (MCP)

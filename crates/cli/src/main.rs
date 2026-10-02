@@ -127,6 +127,9 @@ struct Config {
     root_package: String,
     /// `[stack.fitness.packages]` container-id -> python module path.
     container_packages: BTreeMap<String, String>,
+    /// `[runners]` tool -> command override (program + fixed prefix args).
+    /// Empty means every adapter uses its built-in default command.
+    runners: BTreeMap<String, String>,
 }
 
 impl Default for Config {
@@ -138,6 +141,7 @@ impl Default for Config {
             rust_glue: "tests/glue/rust".to_string(),
             root_package: String::new(),
             container_packages: BTreeMap::new(),
+            runners: BTreeMap::new(),
         }
     }
 }
@@ -180,6 +184,9 @@ fn parse_config(src: &str) -> Config {
             ("stack.fitness", "root_package") => cfg.root_package = v,
             ("stack.fitness.packages", container) => {
                 cfg.container_packages.insert(container.to_string(), v);
+            }
+            ("runners", tool) => {
+                cfg.runners.insert(tool.to_string(), v);
             }
             _ => {}
         }
@@ -612,16 +619,62 @@ struct CmdOutput {
     stderr: String,
 }
 
-fn run_cmd(root: &Path, program: &str, args: &[&str]) -> CliResult<CmdOutput> {
-    let out = Command::new(program)
+/// Run a tool. A spawn failure (program missing) is NOT an error: it lands in
+/// `ok: false` with the os error as stderr, so callers record a skipped or
+/// failed adapter instead of aborting `decispec test`.
+fn run_cmd(root: &Path, program: &str, args: &[String]) -> CmdOutput {
+    let spawned = Command::new(program)
         .args(args)
         .current_dir(root)
-        .output()?;
-    Ok(CmdOutput {
-        ok: out.status.success(),
-        stdout: String::from_utf8_lossy(&out.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&out.stderr).to_string(),
-    })
+        .output();
+    match spawned {
+        Ok(out) => CmdOutput {
+            ok: out.status.success(),
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+        },
+        Err(e) => CmdOutput {
+            ok: false,
+            stdout: String::new(),
+            stderr: format!("{program}: {e}"),
+        },
+    }
+}
+
+/// The command for one tool: a `[runners]` override wins over the built-in
+/// default. The override string splits on whitespace: first token = program
+/// (relative paths resolve against the project root — `run_cmd` sets cwd),
+/// remaining tokens = fixed prefix args the layer-specific args append to.
+fn runner_command(cfg: &Config, key: &str, default: &[&str]) -> (String, Vec<String>) {
+    if let Some(cmd) = cfg.runners.get(key) {
+        let mut tokens = cmd.split_whitespace();
+        if let Some(program) = tokens.next() {
+            return (
+                program.to_string(),
+                tokens.map(str::to_string).collect(),
+            );
+        }
+    }
+    (
+        default[0].to_string(),
+        default[1..].iter().map(|s| s.to_string()).collect(),
+    )
+}
+
+/// Just the program name for on_path-style adapters (first override token,
+/// or the built-in default).
+fn runner_program(cfg: &Config, key: &str, default: &str) -> String {
+    cfg.runners
+        .get(key)
+        .and_then(|cmd| cmd.split_whitespace().next().map(str::to_string))
+        .unwrap_or_else(|| default.to_string())
+}
+
+/// `toolchain not installed (...)` reason naming the actual command tried.
+fn not_installed(program: &str, prefix: &[String]) -> String {
+    let mut cmd = vec![program.to_string()];
+    cmd.extend(prefix.iter().cloned());
+    format!("toolchain not installed ({})", cmd.join(" "))
 }
 
 fn skipped(name: &str, layer: GateLayer, reason: impl Into<String>) -> AdapterRecord {
@@ -636,7 +689,7 @@ fn skipped(name: &str, layer: GateLayer, reason: impl Into<String>) -> AdapterRe
 
 /// Run every adapter whose toolchain is installed and whose generated
 /// artifacts exist. Skipped (not installed) is NOT a failure.
-fn run_adapters(root: &Path) -> CliResult<Manifest> {
+fn run_adapters(root: &Path, cfg: &Config) -> CliResult<Manifest> {
     let results_dir = root.join("tests/generated/results");
     std::fs::create_dir_all(&results_dir)?;
     let mut adapters = Vec::new();
@@ -650,27 +703,24 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
             "no generated unit tests",
         ));
     } else {
-        let probe = run_cmd(root, "python3", &["-m", "pytest", "--version"])?;
+        let (program, prefix) = runner_command(cfg, "pytest", &["python3", "-m", "pytest"]);
+        let probe = run_cmd(root, &program, &args_of(&prefix, &["--version"]));
         if !probe.ok {
             adapters.push(skipped(
                 "pytest",
                 GateLayer::Unit,
-                "toolchain not installed (python3 -m pytest)",
+                not_installed(&program, &prefix),
             ));
         } else {
             let xml_rel = "tests/generated/results/pytest.xml";
             let out = run_cmd(
                 root,
-                "python3",
-                &[
-                    "-m",
-                    "pytest",
-                    "tests/generated/unit",
-                    "-q",
-                    "--junitxml",
-                    xml_rel,
-                ],
-            )?;
+                &program,
+                &args_of(
+                    &prefix,
+                    &["tests/generated/unit", "-q", "--junitxml", xml_rel],
+                ),
+            );
             let mut result_files = Vec::new();
             if root.join(xml_rel).is_file() {
                 result_files.push("pytest.xml".to_string());
@@ -695,25 +745,21 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
 
     // contract / gherkin (cucumber preferred, karate fallback)
     let contract_dir = root.join("tests/generated/contract");
+    let cucumber = runner_program(cfg, "cucumber", "cucumber");
+    let karate = runner_program(cfg, "karate", "karate");
     if !dir_has_files_with_ext(&contract_dir, "feature") {
         adapters.push(skipped(
             "cucumber",
             GateLayer::Contract,
             "no generated contract tests",
         ));
-    } else if on_path("cucumber") {
+    } else if on_path(&cucumber) {
         let xml_rel = "tests/generated/results/contract.xml";
         let out = run_cmd(
             root,
-            "cucumber",
-            &[
-                "tests/generated/contract",
-                "--format",
-                "junit",
-                "--out",
-                xml_rel,
-            ],
-        )?;
+            &cucumber,
+            &args_of(&[], &["tests/generated/contract", "--format", "junit", "--out", xml_rel]),
+        );
         let mut result_files = Vec::new();
         if root.join(xml_rel).is_file() {
             result_files.push("contract.xml".to_string());
@@ -736,8 +782,8 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
             },
             result_files,
         });
-    } else if on_path("karate") {
-        let out = run_cmd(root, "karate", &["tests/generated/contract"])?;
+    } else if on_path(&karate) {
+        let out = run_cmd(root, &karate, &["tests/generated/contract".to_string()]);
         let mut result_files = Vec::new();
         let xml_rel = "tests/generated/results/contract.xml";
         if out.ok && !out.stdout.trim().is_empty() {
@@ -755,7 +801,10 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
             reason: if out.ok {
                 None
             } else {
-                Some(format!("karate exited non-zero: {}", tail(&out.stderr, 3)))
+                Some(format!(
+                    "karate exited non-zero: {}",
+                    tail(&out.stderr, 3)
+                ))
             },
             result_files,
         });
@@ -763,7 +812,7 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
         adapters.push(skipped(
             "cucumber",
             GateLayer::Contract,
-            "toolchain not installed (cucumber or karate)",
+            format!("toolchain not installed ({cucumber} or {karate})"),
         ));
     }
 
@@ -776,25 +825,31 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
             "no generated e2e tests",
         ));
     } else {
-        let probe = run_cmd(root, "npx", &["--no-install", "playwright", "--version"])?;
+        let (program, prefix) = runner_command(
+            cfg,
+            "playwright",
+            &["npx", "--no-install", "playwright"],
+        );
+        let probe = run_cmd(root, &program, &args_of(&prefix, &["--version"]));
         if !probe.ok {
             adapters.push(skipped(
                 "playwright",
                 GateLayer::E2e,
-                "toolchain not installed (npx playwright)",
+                not_installed(&program, &prefix),
             ));
         } else {
             let out = run_cmd(
                 root,
-                "npx",
-                &[
-                    "--no-install",
-                    "playwright",
-                    "test",
-                    "tests/generated/e2e",
-                    "--reporter=junit",
-                ],
-            )?;
+                &program,
+                &args_of(
+                    &prefix,
+                    &[
+                        "test",
+                        "tests/generated/e2e",
+                        "--reporter=junit",
+                    ],
+                ),
+            );
             // junit reporter prints XML to stdout; newer versions write results.xml.
             let xml_rel = "tests/generated/results/playwright.xml";
             let mut result_files = Vec::new();
@@ -830,14 +885,15 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
 
     // infra / conftest (OPA-style)
     let infra_dir = root.join("tests/generated/infra");
+    let conftest = runner_program(cfg, "conftest", "conftest");
     if !dir_has_files_with_ext(&infra_dir, "rego") {
         adapters.push(skipped(
             "conftest",
             GateLayer::Infra,
             "no generated infra policies",
         ));
-    } else if on_path("conftest") {
-        let out = run_cmd(root, "conftest", &["test", "tests/generated/infra"])?;
+    } else if on_path(&conftest) {
+        let out = run_cmd(root, &conftest, &["test".to_string(), "tests/generated/infra".to_string()]);
         adapters.push(AdapterRecord {
             name: "conftest".to_string(),
             layer: GateLayer::Infra,
@@ -860,13 +916,15 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
         adapters.push(skipped(
             "conftest",
             GateLayer::Infra,
-            "toolchain not installed (conftest)",
+            format!("toolchain not installed ({conftest})"),
         ));
     }
 
     // fitness / import-linter + dependency-cruiser
     let fitness_dir = root.join("tests/generated/fitness");
     let has_fitness = fitness_dir.join("dependency-cruiser.cjs").is_file();
+    let lint_imports = runner_program(cfg, "import-linter", "lint-imports");
+    let depcruise = runner_program(cfg, "dependency-cruiser", "depcruise");
     if !has_fitness {
         adapters.push(skipped(
             "import-linter",
@@ -879,12 +937,15 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
             "no generated fitness artifacts",
         ));
     } else {
-        if on_path("lint-imports") {
+        if on_path(&lint_imports) {
             let out = run_cmd(
                 root,
-                "lint-imports",
-                &["--config", "tests/generated/fitness/.importlinter"],
-            )?;
+                &lint_imports,
+                &[
+                    "--config".to_string(),
+                    "tests/generated/fitness/.importlinter".to_string(),
+                ],
+            );
             adapters.push(AdapterRecord {
                 name: "import-linter".to_string(),
                 layer: GateLayer::Fitness,
@@ -907,20 +968,20 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
             adapters.push(skipped(
                 "import-linter",
                 GateLayer::Fitness,
-                "toolchain not installed (lint-imports)",
+                format!("toolchain not installed ({lint_imports})"),
             ));
         }
-        if on_path("depcruise") {
+        if on_path(&depcruise) {
             if root.join("src").is_dir() {
                 let out = run_cmd(
                     root,
-                    "depcruise",
+                    &depcruise,
                     &[
-                        "--config",
-                        "tests/generated/fitness/dependency-cruiser.cjs",
-                        "src",
+                        "--config".to_string(),
+                        "tests/generated/fitness/dependency-cruiser.cjs".to_string(),
+                        "src".to_string(),
                     ],
-                )?;
+                );
                 adapters.push(AdapterRecord {
                     name: "dependency-cruiser".to_string(),
                     layer: GateLayer::Fitness,
@@ -950,7 +1011,7 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
             adapters.push(skipped(
                 "dependency-cruiser",
                 GateLayer::Fitness,
-                "toolchain not installed (depcruise)",
+                format!("toolchain not installed ({depcruise})"),
             ));
         }
     }
@@ -958,8 +1019,18 @@ fn run_adapters(root: &Path) -> CliResult<Manifest> {
     Ok(Manifest { adapters })
 }
 
+/// `prefix` (fixed runner args) followed by the layer-specific `rest`.
+fn args_of(prefix: &[String], rest: &[&str]) -> Vec<String> {
+    prefix
+        .iter()
+        .cloned()
+        .chain(rest.iter().map(|s| s.to_string()))
+        .collect()
+}
+
 fn cmd_test(root: &Path) -> CliResult<ExitCode> {
-    let manifest = run_adapters(root)?;
+    let cfg = load_config(root)?;
+    let manifest = run_adapters(root, &cfg)?;
     std::fs::write(
         root.join("tests/generated/results/manifest.json"),
         serde_json::to_string_pretty(&manifest)?,
@@ -1102,7 +1173,7 @@ fn cmd_gate(
             dir
         }
         None => {
-            let manifest = run_adapters(root)?;
+            let manifest = run_adapters(root, &cfg)?;
             let dir = root.join("tests/generated/results");
             std::fs::write(
                 dir.join("manifest.json"),
@@ -1523,6 +1594,136 @@ mod tests {
             Some("myapp.auth")
         );
         assert_eq!(cfg.container_packages.len(), 2);
+    }
+
+    // -- F11: [runners] overrides + probe spawn errors ------------------------
+
+    #[test]
+    fn config_reads_runners_table() {
+        let cfg = parse_config(
+            "[runners]\npytest = \"backend/.venv/bin/python -m pytest\"\ndepcruise = \"npx depcruise\"\n",
+        );
+        assert_eq!(
+            cfg.runners.get("pytest").map(String::as_str),
+            Some("backend/.venv/bin/python -m pytest")
+        );
+        assert_eq!(
+            cfg.runners.get("depcruise").map(String::as_str),
+            Some("npx depcruise")
+        );
+        assert_eq!(cfg.runners.len(), 2);
+        // no table -> empty map, built-in defaults apply
+        assert!(parse_config("[project]\nname = \"x\"\n").runners.is_empty());
+    }
+
+    /// A fake `pytest`: answers `--version`, writes the JUnit xml on a real
+    /// run, and drops a marker proving it ran. Root-relative program path on
+    /// purpose — overrides must resolve against the project root.
+    const FAKE_PYTEST: &str = r#"#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "--version" ]; then
+    echo "fake-pytest 9.9.9"
+    exit 0
+  fi
+done
+out=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--junitxml" ]; then out="$a"; fi
+  prev="$a"
+done
+if [ -n "$out" ]; then
+  printf '%s' '<testsuite name="fake-pytest"></testsuite>' > "$out"
+fi
+touch .ran-by-fake-pytest
+exit 0
+"#;
+
+    fn project_with_fake_pytest() -> (PathBuf, Config) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_project();
+        std::fs::create_dir_all(root.join("tests/generated/unit")).unwrap();
+        std::fs::write(root.join("tests/generated/unit/test_x.py"), "def test_x():\n    pass\n").unwrap();
+        std::fs::create_dir_all(root.join("tools")).unwrap();
+        let script = root.join("tools/fake-pytest");
+        std::fs::write(&script, FAKE_PYTEST).unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+        let cfg = parse_config("[runners]\npytest = \"tools/fake-pytest\"\n");
+        (root, cfg)
+    }
+
+    #[test]
+    fn adapter_uses_runner_override_for_probe_and_run() {
+        let (root, cfg) = project_with_fake_pytest();
+
+        let manifest = run_adapters(&root, &cfg).unwrap();
+        let pytest = manifest
+            .adapters
+            .iter()
+            .find(|a| a.name == "pytest")
+            .expect("pytest adapter missing");
+        assert_eq!(pytest.status, AdapterStatus::Ran);
+        assert_eq!(
+            pytest.reason, None,
+            "a runner override that works must not record a skip reason"
+        );
+        assert_eq!(pytest.result_files, vec!["pytest.xml".to_string()]);
+        // the override — not the system python3 — did the work
+        assert!(root.join(".ran-by-fake-pytest").is_file(), "fake runner did not run");
+        assert!(root.join("tests/generated/results/pytest.xml").is_file());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn runner_override_missing_binary_skips_quietly_and_test_completes() {
+        let root = temp_project();
+        std::fs::write(
+            root.join("decispec.toml"),
+            "[project]\nname = \"t\"\n\n[runners]\npytest = \"no/such/binary\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("tests/generated/unit")).unwrap();
+        std::fs::write(root.join("tests/generated/unit/test_x.py"), "def test_x():\n    pass\n").unwrap();
+        let cfg = parse_config(
+            &std::fs::read_to_string(root.join("decispec.toml")).unwrap(),
+        );
+
+        // the spawn error becomes a skip, never a bail: adapters still complete
+        let manifest = run_adapters(&root, &cfg).unwrap();
+        let pytest = manifest
+            .adapters
+            .iter()
+            .find(|a| a.name == "pytest")
+            .expect("pytest adapter missing");
+        assert_eq!(pytest.status, AdapterStatus::Skipped);
+        assert!(
+            pytest
+                .reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("toolchain not installed"),
+            "reason: {:?}",
+            pytest.reason
+        );
+        assert!(pytest.reason.as_deref().unwrap_or("").contains("no/such/binary"));
+
+        // ...and `decispec test` still exits 0 with a manifest on disk
+        assert_eq!(cmd_test(&root).unwrap(), ExitCode::from(EXIT_OK));
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("tests/generated/results/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["adapters"][0]["name"], serde_json::json!("pytest"));
+        assert_eq!(
+            manifest["adapters"][0]["status"],
+            serde_json::json!("skipped")
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
