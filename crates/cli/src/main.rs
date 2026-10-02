@@ -88,6 +88,13 @@ enum CommandKind {
     },
     /// Serve MCP over stdio (NDJSON JSON-RPC 2.0) for AI agents
     Mcp,
+    /// Write a single-file, GitHub-renderable decision index (markdown with
+    /// embedded mermaid diagrams and decision tables)
+    Index {
+        /// Output path relative to the project root (default: docs/decisions.md)
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1381,6 +1388,25 @@ fn cmd_mcp() -> CliResult<ExitCode> {
 }
 
 // ---------------------------------------------------------------------------
+// index
+// ---------------------------------------------------------------------------
+
+fn cmd_index(root: &Path, out: Option<PathBuf>) -> CliResult<ExitCode> {
+    let ws = load_workspace_or_bail(root)?;
+    let mut file = decispec_codegen::render_index(&ws);
+    if let Some(out) = out {
+        file.path = out.to_string_lossy().replace('\\', "/");
+    }
+    let path = root.join(&file.path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, &file.content)?;
+    println!("wrote {}", file.path);
+    Ok(ExitCode::from(EXIT_OK))
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -1425,6 +1451,10 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
             cmd_extract(&root, stdout)
         }
         CommandKind::Mcp => cmd_mcp(),
+        CommandKind::Index { out } => {
+            let root = find_project_root()?;
+            cmd_index(&root, out)
+        }
     }
 }
 
@@ -1781,10 +1811,7 @@ spec AUTH-001 {
         let root = extract_fixture();
 
         // First run writes specs/extracted.spec and succeeds.
-        assert_eq!(
-            cmd_extract(&root, false).unwrap(),
-            ExitCode::from(EXIT_OK)
-        );
+        assert_eq!(cmd_extract(&root, false).unwrap(), ExitCode::from(EXIT_OK));
         let draft = root.join("specs/extracted.spec");
         let text = std::fs::read_to_string(&draft).unwrap();
         assert!(text.starts_with("# DRAFT from `decispec extract`"));
@@ -1870,10 +1897,7 @@ spec AUTH-001 {
     fn extract_ignores_decispec_scaffold_when_detecting_language() {
         let root = extract_ts_fixture();
 
-        assert_eq!(
-            cmd_extract(&root, false).unwrap(),
-            ExitCode::from(EXIT_OK)
-        );
+        assert_eq!(cmd_extract(&root, false).unwrap(), ExitCode::from(EXIT_OK));
         let text = std::fs::read_to_string(root.join("specs/extracted.spec")).unwrap();
         // Without scaffold exclusions the 2 glue .py files tie the 2 .ts
         // files and the draft flips to Python with a lone `tests` container.
@@ -1901,10 +1925,7 @@ spec AUTH-001 {
         std::fs::write(root.join("tests/glue/__init__.py"), "def f():\n    pass\n").unwrap();
         std::fs::write(root.join("tests/glue/conftest.py"), "").unwrap();
 
-        assert_eq!(
-            cmd_extract(&root, false).unwrap(),
-            ExitCode::from(EXIT_OK)
-        );
+        assert_eq!(cmd_extract(&root, false).unwrap(), ExitCode::from(EXIT_OK));
         let text = std::fs::read_to_string(root.join("specs/extracted.spec")).unwrap();
         assert!(
             text.contains("container api \"api\""),
@@ -1932,10 +1953,7 @@ spec AUTH-001 {
         )
         .unwrap();
 
-        assert_eq!(
-            cmd_extract(&root, false).unwrap(),
-            ExitCode::from(EXIT_OK)
-        );
+        assert_eq!(cmd_extract(&root, false).unwrap(), ExitCode::from(EXIT_OK));
         let text = std::fs::read_to_string(root.join("specs/extracted.spec")).unwrap();
         assert!(
             text.contains("# Source: docs/adr/0001-use-postgres.md"),
@@ -1965,6 +1983,66 @@ spec AUTH-001 {
         // running cmd_mcp here would block on the test harness's stdin.
         let cli = Cli::try_parse_from(["decispec", "mcp"]).unwrap();
         assert!(matches!(cli.command, CommandKind::Mcp));
+    }
+
+    #[test]
+    fn index_writes_decisions_md_and_exits_0() {
+        let root = temp_project();
+        std::fs::write(
+            root.join("specs/0001-auth.spec"),
+            DEMO_SPEC.trim_start_matches('\n'),
+        )
+        .unwrap();
+
+        assert_eq!(cmd_index(&root, None).unwrap(), ExitCode::from(EXIT_OK));
+        let text = std::fs::read_to_string(root.join("docs/decisions.md")).unwrap();
+        assert!(text.contains("# Decision Index"));
+        assert!(text.contains("```mermaid"));
+        assert!(text.contains("## AUTH-001 — Use OAuth2"));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn index_honors_out_override() {
+        let root = temp_project();
+        std::fs::write(
+            root.join("specs/0001-auth.spec"),
+            DEMO_SPEC.trim_start_matches('\n'),
+        )
+        .unwrap();
+
+        assert_eq!(
+            cmd_index(&root, Some(PathBuf::from("out/index.md"))).unwrap(),
+            ExitCode::from(EXIT_OK)
+        );
+        let text = std::fs::read_to_string(root.join("out/index.md")).unwrap();
+        assert!(text.contains("# Decision Index"));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn index_exits_2_when_specs_are_broken() {
+        let root = temp_project();
+        std::fs::write(
+            root.join("specs/0001-auth.spec"),
+            DEMO_SPEC.trim_start_matches('\n').replace(
+                "scenarios: [valid_token]",
+                "scenarios: [valid_token, nope_missing]",
+            ),
+        )
+        .unwrap();
+
+        // index needs a valid workspace like gen/gate: could not complete,
+        // and it must not write a half-built index.
+        assert_eq!(
+            exit_code(cmd_index(&root, None)),
+            ExitCode::from(EXIT_CANNOT_COMPLETE)
+        );
+        assert!(!root.join("docs/decisions.md").exists());
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

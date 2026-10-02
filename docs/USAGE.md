@@ -50,6 +50,7 @@ decispec gen       # 2. render diagrams + test skeletons (idempotent, safe to re
 decispec test      # 4. run pytest/cucumber/playwright/conftest/import-linter...
 decispec gate      # 5. matrix + verdict; exit 0 = compliant, 1 = violation
 decispec query AUTH-001   # why is this decision here, what covers it, last gate status
+decispec index     # 6. GitHub-renderable docs/decisions.md (diagrams + tables)
 ```
 
 All commands work from any subdirectory; `decispec.toml` is found by walking

@@ -4,7 +4,7 @@
 flowchart TB
   subgraph CLI["cli — Command + Adapter (only I/O lives here)"]
     C1["Cli / CommandKind<br/>clap parse"] --> C2["run()"]
-    C2 --> C3["cmd_check · cmd_gen<br/>cmd_gate · cmd_query"]
+    C2 --> C3["cmd_check · cmd_gen<br/>cmd_gate · cmd_query<br/>cmd_extract · cmd_mcp · cmd_index"]
     C3 --> C4["run_adapters()<br/>probe toolchain, run it"]
     C4 --> C5["AdapterRecord<br/>Ran | Skipped | Failed"]
   end
