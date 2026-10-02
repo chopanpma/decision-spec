@@ -142,15 +142,31 @@ fn render_plantuml_steps(steps: &[FlowStep], depth: usize, out: &mut String) {
     }
 }
 
-/// Mermaid flowchart edge labels (`-->|label|`) cannot contain `(` or `)`
-/// (a paren anywhere in one label is a diagram-wide syntax error — verified
-/// against mermaid.ink) or `|` (terminates the label early). Render the
-/// paren entities and a slash for the pipe; the IR keeps the raw strings.
+/// Mermaid flowchart edge labels (`-->|label|`) only accept a small plain
+/// character set. Two verified facts pin the sanitizer:
+/// - mermaid.ink accepts `&#40;`-style HTML entities, but GitHub's markdown
+///   pipeline HTML-decodes entities BEFORE Mermaid parses the fence, so a
+///   "safe" entity arrives as a literal `(` and fails with a parenthesis
+///   parse error (user-reported on GitHub, 2026-10-02) — only plain
+///   characters are safe in every renderer;
+/// - a raw `|` terminates the label early in every Mermaid version.
+///
+/// So: parens are dropped (labels read fine without them), `|` becomes `/`,
+/// and any other character outside [A-Za-z0-9 ,./:-] collapses to `-`.
+/// The IR keeps the raw strings; quoted node labels keep theirs (parens are
+/// fine there).
 fn mermaid_edge_label(label: &str) -> String {
     label
-        .replace('|', "/")
-        .replace('(', "&#40;")
-        .replace(')', "&#41;")
+        .chars()
+        .filter_map(|c| match c {
+            '(' | ')' => None,
+            '|' => Some('/'),
+            c if c.is_ascii_alphanumeric() || matches!(c, ' ' | ',' | '.' | '-' | ':' | '/') => {
+                Some(c)
+            }
+            _ => Some('-'),
+        })
+        .collect()
 }
 
 /// Render the single-file, GitHub-renderable decision index (markdown with
@@ -979,9 +995,12 @@ mod tests {
         assert!(puml.content.contains("api --> auth : requests token"));
     }
 
-    // F19: rel labels with parens break Mermaid flowchart parsing (verified
-    // against mermaid.ink: raw parens -> HTTP 400, &#40;/&#41; -> 200); a raw
-    // `|` would terminate the edge label early. PlantUML is unaffected.
+    // F19/F23: rel labels with parens break Mermaid flowchart parsing; a raw
+    // `|` terminates the edge label early. F19 escaped parens as HTML
+    // entities (verified on mermaid.ink), but F23 found GitHub's markdown
+    // pipeline HTML-decodes entities BEFORE Mermaid parses, so only plain
+    // characters are safe in edge labels. Node labels (quoted id["..."])
+    // accept parens and keep raw strings.
     fn model_with_rel(label: &str) -> decispec_ir::Workspace {
         let mut ws = decispec_ir::Workspace::default();
         ws.models.push(decispec_ir::Model {
@@ -1007,16 +1026,16 @@ mod tests {
     }
 
     #[test]
-    fn mermaid_edge_labels_escape_parens() {
+    fn mermaid_edge_labels_drop_parens() {
         let ws = model_with_rel("queries (api, application)");
         let mmd = mermaid_model(&ws);
         assert!(
-            mmd.contains("api -->|queries &#40;api, application&#41;| db"),
+            mmd.contains("api -->|queries api, application| db"),
             "{mmd}"
         );
         assert!(
-            !mmd.contains("-->|queries ("),
-            "raw parens in the edge label break Mermaid parsing:\n{mmd}"
+            !mmd.contains('(') && !mmd.contains(')'),
+            "no raw parens anywhere in this diagram's edge label:\n{mmd}"
         );
     }
 
@@ -1025,6 +1044,27 @@ mod tests {
         let ws = model_with_rel("a | b");
         let mmd = mermaid_model(&ws);
         assert!(mmd.contains("-->|a / b| db"), "{mmd}");
+    }
+
+    #[test]
+    fn mermaid_edge_labels_are_plain_ascii_only() {
+        // The GitHub failure mode: `&#40;` arrives as a literal `(` after
+        // markdown HTML-decoding, so no `&`/`#` may survive either — the
+        // edge-label charset is plain ASCII only.
+        let ws = model_with_rel("queries (v2) & cache #40 — utf8 ✓");
+        let mmd = mermaid_model(&ws);
+        let edge = mmd.lines().find(|l| l.contains("-->|")).unwrap();
+        assert!(
+            !edge.contains('(')
+                && !edge.contains(')')
+                && !edge.contains('&')
+                && !edge.contains('#'),
+            "edge label must be plain characters only:\n{edge}"
+        );
+        assert!(
+            edge.contains("-->|queries v2 - cache -40 - utf8 -|"),
+            "out-of-charset chars collapse to a dash: {edge}"
+        );
     }
 
     #[test]
