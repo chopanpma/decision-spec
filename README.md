@@ -130,6 +130,10 @@ Semantics:
 - Strings are double-quoted (`\"` and `\\` escapes); unterminated strings are
   parse errors.
 
+Writing specs — what makes a decision worth writing, the EARS pattern, a
+worked example, and the anti-patterns: see
+[docs/SPEC_AUTHORING.md](docs/SPEC_AUTHORING.md).
+
 ## Commands
 
 | Command | Behavior |

@@ -57,6 +57,10 @@ All commands work from any subdirectory; `decispec.toml` is found by walking
 up. Regeneration is byte-identical, never touches `tests/glue/`, and deletes
 artifacts whose spec item disappeared.
 
+Writing specs well matters more than any command — decision-block rules, the
+EARS pattern, and a worked example: see
+[SPEC_AUTHORING.md](SPEC_AUTHORING.md).
+
 ## 4. Writing specs (the 20% you need)
 
 ```sdl
