@@ -1,0 +1,9 @@
+[project]
+name = "spec-decision-log"
+
+[stack]
+lang = "rust"               # python | rust (more later)
+glue_module = "tests.glue"   # python glue import path
+
+[runners]
+# optional per-tool overrides; built-in defaults otherwise

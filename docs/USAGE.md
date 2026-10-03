@@ -116,8 +116,9 @@ api = "myapp.api"
 auth = "myapp.auth"
 ```
 
-Unmapped containers fall back to their id with a TODO note in the generated
-`.importlinter`.
+A `rel` is enforced only when **both** of its containers are mapped here
+(import-linter is python-only); a rel with an unmapped endpoint gets a TODO
+naming the container to add, and no contract.
 
 ## 6. Exit codes (CI contract)
 

@@ -28,8 +28,10 @@ pub struct CodegenConfig {
     pub root_package: String,
     /// `[stack.fitness.packages]` container-id -> importable module path, so a
     /// model container named `api` can be checked as `myapp.api` instead of a
-    /// bare `api` that no interpreter can resolve. Containers with no entry
-    /// fall back to the container id (see `fitness_module`).
+    /// bare `api` that no interpreter can resolve. A rel gets a real
+    /// `.importlinter` contract only when *both* of its endpoints are mapped;
+    /// an unmapped endpoint yields a TODO comment instead (import-linter is
+    /// python-only, so a contract over a non-python container cannot run).
     pub container_packages: BTreeMap<String, String>,
 }
 
@@ -497,22 +499,20 @@ pub fn conftest_toml() -> GeneratedFile {
 // fitness layer: import-linter + dependency-cruiser
 // ---------------------------------------------------------------------------
 
-/// Resolve the module path a fitness linter should use for `container`.
+/// import-linter contracts for every model rel: one `forbidden` contract (the
+/// rel's TO side must not import its FROM side) plus one `layers` contract
+/// allowing the allowed direction.
 ///
-/// Configured containers map to their real importable package; unconfigured
-/// ones fall back to the bare container id so codegen keeps producing a usable
-/// (if incomplete) file. Returns `(module, is_configured)`.
+/// A contract is emitted only when **both** endpoints have a
+/// `[stack.fitness.packages]` mapping, because import-linter is python-only: a
+/// container with no mapping (a TypeScript directory in a mixed stack) is not an
+/// importable module, and a contract naming it would make `lint-imports` fail
+/// on the whole file. Rels with an unmapped endpoint get a TODO comment naming
+/// the container and the key to add instead.
 ///
-/// Only the *module positions* of the emitted contract use this. Section names
-/// and `name =` lines keep the raw container ids, so a contract's identity does
-/// not change when someone edits `decispec.toml`.
-fn fitness_module<'a>(cfg: &'a CodegenConfig, container: &'a str) -> (&'a str, bool) {
-    match cfg.container_packages.get(container) {
-        Some(pkg) => (pkg.as_str(), true),
-        None => (container, false),
-    }
-}
-
+/// Only the *module positions* use the configured package. Section names and
+/// `name =` lines keep the raw container ids, so a contract's identity does not
+/// change when someone edits `decispec.toml`.
 pub fn importlinter(ws: &Workspace, cfg: &CodegenConfig) -> GeneratedFile {
     let mut body = String::from("[importlinter]\n");
     if cfg.root_package.is_empty() {
@@ -523,41 +523,52 @@ pub fn importlinter(ws: &Workspace, cfg: &CodegenConfig) -> GeneratedFile {
     } else {
         body.push_str(&format!("root_package = {}\n", cfg.root_package));
     }
-    let mut unmapped: Vec<&str> = Vec::new();
     for rel in ws.all_rels() {
-        let (from, from_ok) = fitness_module(cfg, &rel.from);
-        let (to, to_ok) = fitness_module(cfg, &rel.to);
-        if !from_ok {
-            unmapped.push(&rel.from);
+        // A contract is only runnable when BOTH endpoints resolve to real
+        // python modules. Containers without a [stack.fitness.packages]
+        // entry (e.g. TypeScript directories in a mixed stack) cannot be
+        // checked by import-linter at all — emit an actionable TODO instead
+        // of a contract that fails the run.
+        let from_mod = cfg.container_packages.get(&rel.from);
+        let to_mod = cfg.container_packages.get(&rel.to);
+        match (from_mod, to_mod) {
+            (Some(from_mod), Some(to_mod)) => {
+                body.push_str(&format!(
+                    "# rel {from} -> {to} : \"{label}\"\n\
+                     [importlinter:contract:rel_{from}_{to}_forbidden]\n\
+                     name = rel {from} -> {to}: {to} must not import {from}\n\
+                     type = forbidden\n\
+                     source_modules =\n    {to_mod}\n\
+                     forbidden_modules =\n    {from_mod}\n\n\
+                     [importlinter:contract:rel_{from}_{to}_allowed]\n\
+                     name = rel {from} -> {to}: {from} may import {to}\n\
+                     type = layers\n\
+                     layers =\n    {from_mod}\n    {to_mod}\n\n",
+                    from = rel.from,
+                    to = rel.to,
+                    from_mod = from_mod,
+                    to_mod = to_mod,
+                    label = rel.label,
+                ));
+            }
+            _ => {
+                body.push_str(&format!("# rel {from} -> {to} : \"{label}\"\n", from = rel.from, to = rel.to, label = rel.label));
+                if from_mod.is_none() {
+                    body.push_str(&format!(
+                        "# TODO(decispec): container '{from}' has no [stack.fitness.packages] entry;\n\
+                         # add one (e.g. {from} = myapp.{from}) to enforce this contract\n",
+                        from = rel.from,
+                    ));
+                }
+                if to_mod.is_none() {
+                    body.push_str(&format!(
+                        "# TODO(decispec): container '{to}' has no [stack.fitness.packages] entry;\n\
+                         # add one (e.g. {to} = myapp.{to}) to enforce this contract\n",
+                        to = rel.to,
+                    ));
+                }
+            }
         }
-        if !to_ok {
-            unmapped.push(&rel.to);
-        }
-        body.push_str(&format!(
-            "# rel {from} -> {to} : \"{label}\"\n\
-             [contract:rel_{from}_{to}_forbidden]\n\
-             name = rel {from} -> {to}: {to} must not import {from}\n\
-             type = forbidden\n\
-             source_modules =\n    {to_mod}\n\
-             forbidden_modules =\n    {from_mod}\n\n\
-             [contract:rel_{from}_{to}_allowed]\n\
-             name = rel {from} -> {to}: {from} may import {to}\n\
-             type = layers\n\
-             layers =\n    {from_mod}\n    {to_mod}\n\n",
-            from = rel.from,
-            to = rel.to,
-            from_mod = from,
-            to_mod = to,
-            label = rel.label,
-        ));
-    }
-    unmapped.sort_unstable();
-    unmapped.dedup();
-    for c in unmapped {
-        body.push_str(&format!(
-            "# TODO(decispec): container '{c}' has no [stack.fitness.packages] entry; \
-             using it verbatim as a module path\n"
-        ));
     }
     file("tests/generated/fitness/.importlinter".to_string(), body)
 }
@@ -569,28 +580,52 @@ pub fn importlinter(ws: &Workspace, cfg: &CodegenConfig) -> GeneratedFile {
 pub fn depcruise(ws: &Workspace, _cfg: &CodegenConfig) -> GeneratedFile {
     let mut rules = String::new();
     for rel in ws.all_rels() {
+        // Direction: the TO side of the rel is the lower/dependency layer, so
+        // the forbidden rule restricts TO from importing FROM.
         let from = &rel.from;
         let to = &rel.to;
+        // `\\.` below is a JS string escape, so the file on disk carries `\.`
+        // and depcruise matches a literal dot rather than "any character".
         rules.push_str(&format!(
             "    // rel {from} -> {to} : \"{label}\" (forbid {to} -> {from})\n    {{\n      \
              name: 'decispec-{to}-not-{from}',\n      \
              comment: 'decispec rel {from} -> {to}: {to} must not import {from}',\n      \
-severity: 'error',\n      \
-             from: {{ path: '(^|[/\\\\]){from}([/\\\\]|$)' }},\n      \
-             to: {{ path: '(^|[/\\\\]){to}([/\\\\]|$)' }},\n    }},\n",
+             severity: 'error',\n      \
+             from: {{ path: '{to_path}' }},\n      \
+             to: {{ path: '{from_path}' }},\n    }},\n",
             from = from,
             to = to,
+            to_path = depcruise_path_segment(to),
+            from_path = depcruise_path_segment(from),
             label = rel.label,
         ));
     }
     let body = format!(
         "/** @type {{import('dependency-cruiser').IConfiguration}} */\n\
+         // NOTE(decispec): rule paths match a container as one path segment — a\n\
+         // directory named after the container id, or a single file <id>.<ext>.\n\
+         // The container id must therefore appear verbatim in the source tree\n\
+         // (extracted specs take it from the directory name).\n\
          module.exports = {{\n  options: {{\n    doNotFollow: {{ path: 'node_modules' }},\n  }},\n  forbidden: [\n{rules}  ],\n}};\n"
     );
     file(
         "tests/generated/fitness/dependency-cruiser.cjs".to_string(),
         body,
     )
+}
+
+/// Regex that matches the container id `id` as one **path segment**.
+///
+/// depcruise validates every rule path with `safe-regex` and refuses to cruise at
+/// all when a pattern looks unsafe — a character class such as `[/\\]` is enough
+/// to trip it (verified on dependency-cruiser 18.5.0: `has an unsafe regular
+/// expression. Bailing out.`). So the pattern uses only alternation and an
+/// escaped dot.
+///
+/// The anchoring is what makes it precise: a bare `api` also matches
+/// `api-gateway/`, which reports an allowed import as a violation.
+fn depcruise_path_segment(id: &str) -> String {
+    format!(r"(^|/){id}(/|\.|$)")
 }
 
 // ---------------------------------------------------------------------------
@@ -1200,7 +1235,20 @@ mod tests {
     #[test]
     fn contract_e2e_infra_fitness_artifacts() {
         let ws = decispec_parse_for_tests::parse_demo();
-        let generated = render_all(&ws, &CodegenConfig::default());
+        // The fitness config is what makes `.importlinter` runnable: contracts
+        // are emitted only for rels whose both endpoints are mapped python
+        // packages (the demo's only rel is api -> auth).
+        let cfg = CodegenConfig {
+            root_package: "myapp".to_string(),
+            container_packages: [
+                ("api".to_string(), "myapp.api".to_string()),
+                ("auth".to_string(), "myapp.auth".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ..CodegenConfig::default()
+        };
+        let generated = render_all(&ws, &cfg);
 
         let feature = generated
             .iter()
@@ -1324,30 +1372,71 @@ mod tests {
     }
 
     #[test]
-    fn unmapped_containers_fall_back_to_the_container_id() {
-        let ws = decispec_parse_for_tests::parse_demo();
-        let cfg = CodegenConfig {
-            lang: "python".to_string(),
-            glue_module: "tests.glue".to_string(),
-            rust_glue: "tests/glue/rust".to_string(),
-            root_package: String::new(),
-            container_packages: Default::default(),
-        };
-        let il = importlinter(&ws, &cfg);
-        // Unconfigured: keep working as before, but flag that a human must act.
-        assert!(il.content.contains("\n    api\n"), "{}", il.content);
-        assert!(il.content.contains("\n    auth\n"), "{}", il.content);
+    fn depcruise_forbids_the_to_side_from_importing_the_from_side() {
+        // rel api -> db means db is the lower/dependency side: the rule
+        // must forbid DB importing API (not the other way around). Assert
+        // the restricted side and the disallowed dependency, not rule names.
+        let ws = model_with_rel("requests token");
+        let out = depcruise(&ws, &CodegenConfig::default());
         assert!(
-            il.content
-                .contains("container 'auth' has no [stack.fitness.packages] entry"),
-            "unmapped containers must leave an actionable note:\n{}",
-            il.content
+            out.content.contains(r"from: { path: '(^|/)db(/|\.|$)' }"),
+            "db (the rel's TO side) must be the restricted module:\n{}",
+            out.content
         );
-        // With no root_package we must not emit a bogus empty setting.
         assert!(
-            !il.content.contains("root_package =\n"),
-            "empty root_package would break import-linter:\n{}",
-            il.content
+            out.content.contains(r"to: { path: '(^|/)api(/|\.|$)' }"),
+            "api (the rel's FROM side) must be the disallowed dependency:\n{}",
+            out.content
+        );
+    }
+
+    #[test]
+    fn depcruise_paths_are_segment_anchored_without_rejected_regex_constructs() {
+        // depcruise 18 refuses to cruise at all when a rule path trips its
+        // safe-regex check — a character class such as [/\] is enough to do it
+        // (verified on 18.5.0: "has an unsafe regular expression. Bailing out.").
+        // The emitted pattern must therefore use only alternation and an escaped
+        // dot, and must stay anchored so `api` cannot swallow `api-gateway/`.
+        let ws = model_with_rel("requests token");
+        let out = depcruise(&ws, &CodegenConfig::default());
+        let paths: Vec<&str> = out
+            .content
+            .lines()
+            .filter(|line| {
+                let line = line.trim_start();
+                line.starts_with("from: {") || line.starts_with("to: {")
+            })
+            .filter_map(|line| line.split_once("path: '"))
+            .filter_map(|(_, rest)| rest.split_once('\''))
+            .map(|(value, _)| value)
+            .collect();
+        assert_eq!(
+            paths,
+            vec![r"(^|/)db(/|\.|$)", r"(^|/)api(/|\.|$)"],
+            "every rule path must be segment-anchored:\n{}",
+            out.content
+        );
+        for path in &paths {
+            for rejected in ["[/\\]", "[^", "+", "*"] {
+                assert!(
+                    !path.contains(rejected),
+                    "regex construct {rejected:?} in {path:?} that depcruise may reject"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn depcruise_config_documents_that_paths_match_container_directories() {
+        // The container id has to appear verbatim in the cruised source tree; the
+        // header must say so, otherwise a user cannot tell why a rule matches
+        // nothing.
+        let ws = model_with_rel("requests token");
+        let out = depcruise(&ws, &CodegenConfig::default());
+        assert!(
+            out.content.contains("match a container as one path segment"),
+            "{}",
+            out.content
         );
     }
 
@@ -1368,8 +1457,10 @@ mod tests {
         let with_cfg = depcruise(&ws, &configured);
         let unconfigured = depcruise(&ws, &CodegenConfig::default());
         assert_eq!(with_cfg, unconfigured);
+        // paths are segment-anchored container ids: safe for depcruise's
+        // safe-regex check and independent of python module mappings.
         assert!(
-            with_cfg.content.contains(r"(^|[/\\])api([/\\]|$)"),
+            with_cfg.content.contains(r"path: '(^|/)api(/|\.|$)'"),
             "{}",
             with_cfg.content
         );
@@ -1381,20 +1472,149 @@ mod tests {
     }
 
     #[test]
+    fn importlinter_emits_contracts_only_for_python_mapped_rels() {
+        // Mixed stack: api/auth are python packages with mappings; webapp is a
+        // TS directory with none. Only the api->auth pair is a runnable
+        // contract; rels touching webapp are TODO comments naming the gap.
+        let mut ws = decispec_ir::Workspace::default();
+        ws.models.push(decispec_ir::Model {
+            containers: vec![
+                decispec_ir::Container {
+                    id: "api".to_string(),
+                    label: "API".to_string(),
+                },
+                decispec_ir::Container {
+                    id: "auth".to_string(),
+                    label: "Auth".to_string(),
+                },
+                decispec_ir::Container {
+                    id: "webapp".to_string(),
+                    label: "Webapp".to_string(),
+                },
+            ],
+            rels: vec![
+                decispec_ir::Rel {
+                    from: "api".to_string(),
+                    to: "auth".to_string(),
+                    label: "requests token".to_string(),
+                },
+                decispec_ir::Rel {
+                    from: "auth".to_string(),
+                    to: "webapp".to_string(),
+                    label: "serves".to_string(),
+                },
+            ],
+            flows: vec![],
+            file: "specs/x.spec".to_string(),
+        });
+        let cfg = CodegenConfig {
+            root_package: "myapp".to_string(),
+            container_packages: [
+                ("api".to_string(), "myapp.api".to_string()),
+                ("auth".to_string(), "myapp.auth".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ..CodegenConfig::default()
+        };
+        let il = importlinter(&ws, &cfg);
+        // the python pair gets a full contract pair...
+        assert!(
+            il.content.contains("[importlinter:contract:rel_api_auth_forbidden]"),
+            "{}",
+            il.content
+        );
+        assert!(
+            il.content.contains("[importlinter:contract:rel_api_auth_allowed]"),
+            "{}",
+            il.content
+        );
+        // ...with the direction pinned: forbidden source is the TO side.
+        let forbidden = il
+            .content
+            .split("[importlinter:contract:rel_api_auth_forbidden]")
+            .nth(1)
+            .expect("forbidden contract")
+            .split("\n\n")
+            .next()
+            .unwrap();
+        assert!(
+            forbidden.contains("source_modules =\n    myapp.auth"),
+            "forbidden contract must restrict the TO side (auth):\n{forbidden}"
+        );
+        assert!(
+            forbidden.contains("forbidden_modules =\n    myapp.api"),
+            "forbidden contract must forbid importing the FROM side (api):\n{forbidden}"
+        );
+        // rels touching the unmapped TS container are TODOs, never contracts.
+        assert!(
+            !il.content.contains("[importlinter:contract:rel_auth_webapp"),
+            "no contract for a rel touching an unmapped container:\n{}",
+            il.content
+        );
+        assert!(
+            il.content
+                .contains("container 'webapp' has no [stack.fitness.packages] entry"),
+            "the TODO must name the container and what to add:\n{}",
+            il.content
+        );
+    }
+
+    #[test]
+    fn unmapped_containers_get_todos_instead_of_bogus_contracts() {
+        // No mappings at all: import-linter cannot run contracts for module
+        // names we invented, so only TODOs are emitted (plus the
+        // root_package TODO, which stays honest and intentional).
+        let ws = decispec_parse_for_tests::parse_demo();
+        let cfg = CodegenConfig {
+            root_package: String::new(),
+            container_packages: Default::default(),
+            ..CodegenConfig::default()
+        };
+        let il = importlinter(&ws, &cfg);
+        assert!(
+            !il.content.contains("[contract:"),
+            "unmapped containers must not produce contracts:\n{}",
+            il.content
+        );
+        assert!(
+            il.content
+                .contains("container 'auth' has no [stack.fitness.packages] entry"),
+            "unmapped containers must leave an actionable note:\n{}",
+            il.content
+        );
+        // The no-root_package TODO stays: an empty setting would break
+        // import-linter, so the file says what to add instead.
+        assert!(
+            il.content.contains("set [stack.fitness] root_package"),
+            "{}",
+            il.content
+        );
+        assert!(
+            !il.content.contains("root_package =\n"),
+            "empty root_package would break import-linter:\n{}",
+            il.content
+        );
+    }
+
+    #[test]
     fn fitness_contract_identity_survives_config_changes() {
         // Section names / `name =` lines must stay keyed on container ids so a
         // contract does not get a new identity when decispec.toml changes.
         let ws = decispec_parse_for_tests::parse_demo();
         let configured = CodegenConfig {
             root_package: "myapp".to_string(),
-            container_packages: [("api".to_string(), "myapp.api".to_string())]
-                .into_iter()
-                .collect(),
+            container_packages: [
+                ("api".to_string(), "myapp.api".to_string()),
+                ("auth".to_string(), "myapp.auth".to_string()),
+            ]
+            .into_iter()
+            .collect(),
             ..CodegenConfig::default()
         };
         let il = importlinter(&ws, &configured);
         assert!(
-            il.content.contains("[contract:rel_api_auth_forbidden]"),
+            il.content.contains("[importlinter:contract:rel_api_auth_forbidden]"),
             "{}",
             il.content
         );

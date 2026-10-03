@@ -122,14 +122,20 @@ Evidence-based; tracked on `.coord/BOARD.md`. Nothing in F1–F7's documented
 scope is missing from code — the gaps are bugs, dead config, and coverage
 holes rather than absent features.
 
-1. **F9 — dependency-cruiser rule direction is inverted.** `codegen::depcruise`
-   (codegen/src/lib.rs:412) emits, for `rel api -> auth`, a rule whose
-   `from`/`to` forbid api→auth — the direction the import-linter contract
-   explicitly *allows* ("api may import auth"), and the opposite of README:167
-   ("forbids b → a"). dependency-cruiser's `from` is the dependent module, so
-   the generated config fails allowed imports and permits forbidden ones. The
-   existing test asserts rule *name* and regex *shape* only, which is why it
-   slipped through. Fix TDD-style: failing direction-asserting test first.
+1. **F9 — dependency-cruiser rule direction is inverted.** ~~open~~ **LANDED
+   (F9, 2026-10-02):** `codegen::depcruise` emitted, for `rel api -> auth`, a
+   rule whose `from`/`to` forbade api→auth — the direction the import-linter
+   contract explicitly *allows* ("api may import auth"), and the opposite of
+   README ("forbids b → a"). dependency-cruiser's `from` is the dependent
+   module, so the generated config failed allowed imports and permitted
+   forbidden ones; the old test asserted rule *name* and regex *shape* only,
+   which is why it slipped through. Two further bugs found while verifying
+   against the real tool (dependency-cruiser 18.5.0): the `[/\\]` path regex
+   tripped depcruise's safe-regex check ("unsafe regular expression. Bailing
+   out."), so the config never ran at all, and a bare container-id path also
+   matched sibling directories (`api` matched `api-gateway/`). Paths are now
+   segment-anchored `(^|/)id(/|\.|$)`, and the direction is pinned by tests that
+   assert the restricted side, not the rule name.
 2. **F10 — zero integration coverage of the binary.** All 67 tests are inline
    `#[cfg(test)]` unit tests; nothing executes the built `decispec`. The
    README quickstart (init → check → gen → test → gate → query) survives only
@@ -143,10 +149,13 @@ holes rather than absent features.
    is the worst outcome.
 4. **Accepted as MVP limitations (verified accurate against code):** contract/
    e2e reporter naming unverifiable in-repo (suite-level fallback exists),
-   `.importlinter`/depcruise never executed against real toolchains, Rego TODO
-   stubs, depcruise skipped without `src/` (so fitness on Python layouts never
-   exercises it), no contradiction checking, no infra drift detection,
-   single-line strings, Windows untested.
+   Rego TODO stubs, depcruise skipped without `src/` (so fitness on Python
+   layouts never exercises it), no contradiction checking, no infra drift
+   detection, single-line strings, Windows untested. (`.importlinter`/depcruise
+   "never executed" was true until F9/F27: both are now executed against
+   import-linter 2.5.2 / dependency-cruiser 18.5.0 on fixture trees, which is
+   how the ignored-contract-section bug fixed by F27 was found — but neither has
+   run against a production project's pinned toolchain.)
 5. **Doc/code nits to fold into F9–F11 or the MVP-end docs pass:** README:163
    says "rstest-style" but codegen emits plain `#[test]` + `todo!()`;
    `init` never writes `[stack.fitness]` (fitness config is always manual);
@@ -170,3 +179,15 @@ deprecated→superseded with a self-referenced `superseded_by` TODO placeholder
 when no successor is determinable). Extraction stays deterministic —
 requirements and `superseded_by` targets are never inferred; the agent/human
 workflow for that layer is `docs/PORTING.md`.
+
+**F27 (fitness codegen)** — LANDED 2026-10-02 (see
+`.coord/reviews/F27.md`), with F9 (see `.coord/reviews/F9.md`): the generated
+`.importlinter` emitted `[contract:<id>]` sections, a spelling import-linter
+never reads — `IniFileUserOptionReader` only accepts sections prefixed
+`importlinter:` — so **zero contracts were evaluated and the file always exited
+0**: the fitness row reported a pass while checking nothing (verified against
+import-linter 2.5.2). Sections are now `[importlinter:contract:<id>]`, and a
+rel is enforced only when both of its containers have a
+`[stack.fitness.packages]` mapping, because a contract over an unmapped
+container aborts the whole run ("Module 'frontend_app' does not exist."). The
+`root_package` TODO stays: an empty setting is worse than a comment.
