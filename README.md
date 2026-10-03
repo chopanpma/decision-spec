@@ -184,7 +184,7 @@ comment style of the file type.
 | scenario on `contract` | `tests/generated/contract/<spec>.feature`: one Feature (named after the decision title), one Scenario per contract-layer scenario, each Scenario named `<spec_id>_<scenario_id>` so the gate can match it per item. |
 | scenario on `e2e` | `tests/generated/e2e/<scenario>.spec.ts` Playwright skeleton, titled `<spec_id> <scenario_id>` so the gate can match it per item. |
 | `infra_policy` | `tests/generated/infra/<policy>.rego` (`package decispec.<policy>`, `deny[msg]` TODO body with a realistic example) + `tests/generated/infra/conftest.toml`. |
-| `rel a -> b` | `tests/generated/fitness/.importlinter` (forbidden: b must not import a; layers: a may import b) **and** `tests/generated/fitness/dependency-cruiser.cjs` (forbids b → a). |
+| `rel a -> b` | `tests/generated/fitness/.importlinter` (forbidden: b must not import a; layers: a may import b) — emitted **only when both `a` and `b` have a `[stack.fitness.packages]` mapping**, since import-linter is python-only; a rel with an unmapped endpoint gets a TODO naming the container to map. **and** `tests/generated/fitness/dependency-cruiser.cjs` (forbids b → a; each path matches the container as one path segment). |
 
 ## Gate semantics
 
@@ -240,7 +240,9 @@ root_package = "myapp"
 [stack.fitness.packages]
 # container-id -> importable python module, so a model container named `api`
 # is checked as `myapp.api` rather than a bare `api` no interpreter can import.
-# Unmapped containers fall back to the container id and leave a TODO note.
+# A `rel` is enforced only when BOTH of its containers are mapped here (import-
+# linter is python-only); otherwise the generated `.importlinter` carries a TODO
+# naming the container to add, and no contract.
 api = "myapp.api"
 auth = "myapp.auth"
 
@@ -353,18 +355,23 @@ Dependencies are deliberately minimal: `clap`, `thiserror`, `serde` +
 - **Infra/fitness rows are adapter-status-based.** They are judged from adapter
   exit status, not parsed violations, since those toolchains emit no JUnit.
 - **Fitness artifacts are best-effort skeletons.** `.importlinter` module paths
-  come from `[stack.fitness.packages]` (see above); `dependency-cruiser.cjs`
-  paths still come straight from container ids, which is correct for a JS/TS
-  tree where a container is a directory but wrong if your JS layout differs.
+  come from `[stack.fitness.packages]` (see above) and a contract is emitted only
+  for a rel whose both containers are mapped; `dependency-cruiser.cjs` paths are
+  the container ids as path segments (`(^|/)api(/|\.|$)`), which is correct for a
+  JS/TS tree where a container is a directory but wrong if your JS layout differs.
+  Both tools were executed against these artifacts on fixture trees
+  (import-linter 2.5.2, dependency-cruiser 18.5.0) — see the fitness notes above
+  for the exact contract spelling and regex rules they require.
 - **Contract/e2e reporter naming is an assumption.** The generated contract and
   e2e test names were chosen to survive JUnit round-tripping, but neither
   cucumber/karate nor playwright is available in this repo, so the exact
   testcase names those reporters emit are unverified. If they disagree, the
   gate silently degrades to suite-level matching (with a warning) rather than
   reporting per-item results.
-- **`.importlinter` was not run against import-linter.** `import-linter` is not
-  installed here, so the generated file is verified only by shape (live
-  `root_package`, resolved module paths), not by actually executing it.
+- **`.importlinter` was not run against a real project.** The generated file is
+  verified against import-linter 2.5.2 on a fixture package (contracts evaluate,
+  a forbidden import exits 1, an unmapped container would abort the file), but no
+  production project's python tree has been linted with it yet.
 - **Rego policies are TODO stubs** that deny nothing until implemented.
 - Strings are single-line.
 - Windows is untested; generated paths use forward slashes.
