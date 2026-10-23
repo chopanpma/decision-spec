@@ -55,7 +55,7 @@ spec GEN-002 {
 
 decision GEN-003 "Generated test artifacts embed the spec and item ids the gate matches on" {
   status: accepted
-  context: "README 'Codegen mapping': pytest files, contract features, Playwright titles, and rust skeletons all carry the spec item id, sanitized through ir::names (ARCH-003), so gate matching is a name comparison. F6/F23 fixed the escaping half of this contract."
+  context: "README 'Codegen mapping': pytest files, contract features, Playwright titles, and rust skeletons all carry the spec item id, sanitized through ir::names (ARCH-003), so gate matching is a name comparison. F6/F23 fixed the escaping half of this contract. F47 (2026-10-23, user tvgo retro: 86 false greens before TASH-515) amended the Playwright half: an unimplemented e2e stub is declared test.fixme so the toolchain reports <skipped> — paired with GATE-008 the row is honestly SKIPPED instead of a silent pass from an empty body."
   consequences: "+ the gate needs no out-of-band mapping from artifact to spec item. - the ids become public API: renaming a scenario changes generated test names and can break historical JUnit comparisons."
 }
 
@@ -63,7 +63,7 @@ spec GEN-003 {
   requirement GEN-003-R1 (EARS) {
     text: "WHEN artifacts are generated for spec items THEN their file names, test names, and titles SHALL embed the spec and item ids as produced by ir::names"
     layers: [unit]
-    scenarios: [pytest_files_embed_spec_and_item_ids, contract_feature_is_idempotent, playwright_spec_shape_is_pinned, rust_skeletons_emitted_only_for_rust_stack, contract_e2e_infra_fitness_artifacts, contract_and_e2e_names_survive_norm]
+    scenarios: [pytest_files_embed_spec_and_item_ids, contract_feature_is_idempotent, playwright_spec_shape_is_pinned, playwright_stub_marks_fixme_not_silent_pass, rust_skeletons_emitted_only_for_rust_stack, contract_e2e_infra_fitness_artifacts, contract_and_e2e_names_survive_norm]
   }
   scenario pytest_files_embed_spec_and_item_ids {
     given: "a scenario on the unit layer"
@@ -82,6 +82,12 @@ spec GEN-003 {
     when: "its Playwright spec is generated"
     then: "the title embeds the spec and scenario ids in the pinned shape"
     # delegates: decispec-codegen tests::playwright_spec_shape_is_pinned
+  }
+  scenario playwright_stub_marks_fixme_not_silent_pass {
+    given: "an e2e-layer scenario whose flow is not implemented yet"
+    when: "its Playwright stub is generated"
+    then: "the test is declared test.fixme so the toolchain reports it skipped instead of passing an empty body"
+    # delegates: decispec-codegen tests::playwright_stub_marks_fixme_not_silent_pass
   }
   scenario rust_skeletons_emitted_only_for_rust_stack {
     given: "a workspace whose decispec.toml sets lang = rust"
@@ -187,13 +193,13 @@ spec GEN-005 {
 
 decision GEN-006 "The decision index renders a GitHub-ready page or exits 2 on broken specs" {
   status: accepted
-  context: "F20 landed index as an on-demand render (docs/decisions.md) with mermaid fences, escaped table cells, and the superseded_by line; it reuses the gen family's load-or-bail rule so a broken workspace exits 2 instead of publishing a stale page."
+  context: "F20 landed index as an on-demand render (default .decispec/docs/decisions.md since F49; docs/decisions.md before it) with mermaid fences, escaped table cells, and the superseded_by line; it reuses the gen family's load-or-bail rule so a broken workspace exits 2 instead of publishing a stale page."
   consequences: "+ anyone browsing the repo sees the whole decision picture without running the tool. - the index is generated on demand only, so it rots unless a human or CI runs decispec index after spec edits."
 }
 
 spec GEN-006 {
   requirement GEN-006-R1 (EARS) {
-    text: "WHEN index runs on a valid workspace THEN it SHALL render mermaid fences and decision tables into docs/decisions.md or the --out path with markdown escaping and exit 2 when specs do not parse"
+    text: "WHEN index runs on a valid workspace THEN it SHALL render mermaid fences and decision tables into .decispec/docs/decisions.md or the --out path with markdown escaping and exit 2 when specs do not parse"
     layers: [unit]
     scenarios: [index_renders_title_mermaid_fences_and_tables, index_escapes_table_cells, index_renders_superseded_by_line, index_honors_out_override, index_exits_2_when_specs_are_broken]
   }
@@ -288,5 +294,56 @@ spec GEN-007 {
     when: "a reader checks the path convention"
     then: "the config documents that paths match container directories"
     # delegates: decispec-codegen tests::depcruise_config_documents_that_paths_match_container_directories
+  }
+}
+
+decision GEN-008 "Diagrams render under .decispec/diagrams, the gitignored generated-artifact tree" {
+  status: accepted
+  context: "User requirement 2026-10-22: generated artifacts should not pollute the repo. Two shapes were on the table — a configurable [outputs] diagrams path (possibly escaping the checkout) or a fixed gitignored dot-folder — and the user chose the dot-folder as simpler: no new config surface, no escape rules, no overlap guards. .decispec already carries report.json and decispec.db and is gitignored by init, so it is the natural home for everything generated; docs/ becomes human-authored content only. Repos that committed diagrams under docs/diagrams (this repo, tvgo, verydian) keep leftovers unless gen migrates them, so the decision pins a one-time migration: header-bearing diagram files in the old tree are removed by the sweep, foreign files are untouched."
+  consequences: "+ zero generated files in the repo tree by default and nothing to configure; docs/ holds only human-authored pages, with the index's inline mermaid (GEN-006) as the committed rendering surface. - repos with committed docs/diagrams get a one-time migration sweep, and any external consumer that read diagrams from docs/diagrams on disk breaks — none exist today (the index embeds mermaid, the TUI renders in memory), which is exactly why the move is safe. - the diagram location is no longer a choice: projects that want diagrams committed must render the index instead."
+}
+
+spec GEN-008 {
+  requirement GEN-008-R1 (EARS) {
+    text: "WHEN gen renders diagrams THEN it SHALL write them only under .decispec/diagrams and SHALL write no diagram file under docs/diagrams"
+    layers: [unit]
+    scenarios: [gen_writes_diagrams_under_decispec_dir]
+  }
+  requirement GEN-008-R2 (EARS) {
+    text: "WHEN the sweep runs in a project whose docs/diagrams tree still holds header-bearing diagram files THEN it SHALL remove those files and SHALL leave every file without the generated header untouched"
+    layers: [unit]
+    scenarios: [gen_migrates_committed_diagrams_out_of_docs_diagrams]
+  }
+  requirement GEN-008-R3 (EARS) {
+    text: "WHEN gen regenerates a workspace whose specs have not changed THEN the diagram bytes under .decispec/diagrams SHALL be identical across runs and stale diagrams whose spec items disappeared SHALL be removed from that tree"
+    layers: [unit]
+    scenarios: [gen_diagrams_regeneration_is_byte_identical, sweep_treats_decispec_diagrams_as_the_managed_tree]
+  }
+  scenario gen_writes_diagrams_under_decispec_dir {
+    given: "a workspace with containers, rels, and flows"
+    when: "gen runs"
+    then: "every diagram file lands under .decispec/diagrams and docs/diagrams holds no diagram file written by gen"
+    # delegates: decispec (cli) tests::gen_writes_diagrams_under_decispec_dir_not_docs
+    # (same glue also pins decispec-codegen tests::diagram_artifacts_live_under_decispec_dir,
+    # the pure-render assertion that no artifact path starts with docs/)
+  }
+  scenario gen_migrates_committed_diagrams_out_of_docs_diagrams {
+    given: "a project that committed docs/diagrams under the old location, one file carrying the generated header and one hand-edited file without it"
+    when: "gen's sweep runs"
+    then: "the header-bearing file is removed and the hand-edited file survives"
+    # delegates: decispec (cli) tests::sweep_migrates_header_diagrams_out_of_docs_diagrams
+  }
+  scenario gen_diagrams_regeneration_is_byte_identical {
+    given: "a workspace whose specs have not changed since the last gen"
+    when: "gen runs again"
+    then: "the diagram files under .decispec/diagrams are byte-identical to the previous run"
+    # delegates: decispec (cli) tests::gen_twice_keeps_diagram_bytes_identical — the
+    # GEN-001 contract re-pinned end-to-end at the new location
+  }
+  scenario sweep_treats_decispec_diagrams_as_the_managed_tree {
+    given: ".decispec/diagrams holding a stale diagram whose flow was deleted from the specs"
+    when: "gen sweeps stale artifacts"
+    then: "the stale file is removed from .decispec/diagrams and no file outside the managed trees is touched"
+    # delegates: decispec (cli) tests::sweep_removes_stale_diagrams_from_decispec_dir_only
   }
 }

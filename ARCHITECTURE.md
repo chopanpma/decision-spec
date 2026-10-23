@@ -4,7 +4,7 @@
 flowchart TB
   subgraph CLI["cli — Command + Adapter (only I/O lives here)"]
     C1["Cli / CommandKind<br/>clap parse"] --> C2["run()"]
-    C2 --> C3["cmd_check · cmd_gen<br/>cmd_gate · cmd_query<br/>cmd_extract · cmd_mcp · cmd_index"]
+    C2 --> C3["cmd_check · cmd_gen<br/>cmd_gate · cmd_query<br/>cmd_extract · cmd_mcp<br/>cmd_index · cmd_tui"]
     C3 --> C4["run_adapters()<br/>probe toolchain, run it"]
     C4 --> C5["AdapterRecord<br/>Ran | Skipped | Failed"]
   end
@@ -18,6 +18,7 @@ flowchart TB
     RF --> S["write_artifacts<br/>+ stale sweep"]
     G --> ST["store::record_run"]
     X["extract::analyze<br/>project dir -> draft .spec text"]
+    W --> T2["tui::App + views<br/>pure state, TestBackend-tested<br/>cli owns terminal + registry"]
   end
   PD["existing py/js/ts project"] --> X
   X -- "draft feeds the normal pipeline" --> P
@@ -41,7 +42,7 @@ flowchart TB
   classDef pure fill:#e8f5e9,stroke:#2e7d32
   classDef io fill:#fff3e0,stroke:#ef6c00
   classDef pat fill:#e3f2fd,stroke:#1565c0
-  class P,W,R,RF,G,X pure
+  class P,W,R,RF,G,X,T2 pure
   class C4,S,ST io
   class S1,S2,S3,S4,S5,S6 pat
 ```

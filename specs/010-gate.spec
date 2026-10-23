@@ -198,3 +198,144 @@ spec GATE-006 {
     # delegates: decispec (cli) tests::gate_exits_2_when_specs_are_broken
   }
 }
+
+decision GATE-007 "Console filters narrow what the gate prints and never what it records" {
+  status: accepted
+  context: "Asked for on 2026-10-20: slicing the matrix in the terminal (by decision prefix, by status, to failing or uncovered rows only) so a human or agent reading a 200-row gate does not need a pager. The verdict, counts, failures, the persisted .decispec/report.json, and the store record are the compliance record — a display concern must not be able to move an exit code or a stored run, or CI and the terminal would disagree about the same gate."
+  consequences: "+ one flags slice any matrix in the console without tools outside the gate, and a filter that hides everything still cannot green a red build. - the printed matrix and report.json can now differ by design, so a log excerpt is not the record — the file is, and the output says so when a filter is active. - four more flags to keep stable on the gate, the most CI-visible command."
+}
+
+spec GATE-007 {
+  requirement GATE-007-R1 (EARS) {
+    text: "WHEN gate runs with console filters THEN the verdict, counts, failures, warnings, persisted report, and recorded run SHALL be those of the full unfiltered matrix, and the printed output SHALL say a filter is active or that no rows match"
+    layers: [unit]
+    scenarios: [gate_with_filters_prints_a_narrowed_matrix_but_exit_follows_verdict, gate_json_with_prefix_filter_is_narrowed_while_report_json_stays_full]
+  }
+  requirement GATE-007-R2 (EARS) {
+    text: "WHEN the filter criteria are applied THEN decision-id prefixes SHALL match as OR, a status criterion SHALL restrict to decisions of that status, only-failing and only-uncovered SHALL restrict rows and combine as AND, an empty filter SHALL match every row, and an unknown status name SHALL be rejected as bad usage"
+    layers: [unit]
+    scenarios: [prefix_filter_matches_only_named_decision_prefixes, status_filter_matches_only_that_decision_status, only_failing_matches_fail_rows_and_only_uncovered_matches_uncovered, empty_filter_matches_every_row, filter_flags_parse_prefix_csv_and_reject_unknown_status]
+  }
+  scenario gate_with_filters_prints_a_narrowed_matrix_but_exit_follows_verdict {
+    given: "a project whose gate verdict is FAIL"
+    when: "gate runs with a matching filter and with a filter matching nothing"
+    then: "the exit is findings both times, the verdict never following the filter"
+    # delegates: decispec tests::gate_with_filters_prints_a_narrowed_matrix_but_exit_follows_verdict
+  }
+  scenario gate_json_with_prefix_filter_is_narrowed_while_report_json_stays_full {
+    given: "a FAIL-verdict project and a prefix filter matching no decision"
+    when: "gate runs with --json and the filter"
+    then: "the persisted report.json still names every decision the full run produced"
+    # delegates: decispec tests::gate_json_with_prefix_filter_is_narrowed_while_report_json_stays_full
+  }
+  scenario prefix_filter_matches_only_named_decision_prefixes {
+    given: "a matrix with CMD, DSL, and TUI decisions"
+    when: "the prefix filter is applied"
+    then: "only decisions whose id starts with a named prefix remain, prefixes OR-ed"
+    # delegates: decispec-gate tests::prefix_filter_matches_only_named_decision_prefixes
+  }
+  scenario status_filter_matches_only_that_decision_status {
+    given: "a matrix mixing accepted, proposed, and superseded decisions"
+    when: "the status filter is applied"
+    then: "only decisions carrying that status remain"
+    # delegates: decispec-gate tests::status_filter_matches_only_that_decision_status
+  }
+  scenario only_failing_matches_fail_rows_and_only_uncovered_matches_uncovered {
+    given: "a matrix with passing, failing, and uncovered rows"
+    when: "the only-failing and only-uncovered criteria are applied alone and together"
+    then: "each keeps only its own row results and together they match nothing"
+    # delegates: decispec-gate tests::only_failing_matches_fail_rows_and_only_uncovered_matches_uncovered
+  }
+  scenario empty_filter_matches_every_row {
+    given: "a report with no filter criteria set"
+    when: "the filter is applied"
+    then: "every row remains and the verdict, counts, failures, and warnings stay those of the full report"
+    # delegates: decispec-gate tests::empty_filter_matches_every_row
+  }
+  scenario filter_flags_parse_prefix_csv_and_reject_unknown_status {
+    given: "the gate's filter flags, including a comma-separated prefix list and an unknown status name"
+    when: "they are parsed"
+    then: "prefixes split and trim, known statuses map, and the unknown name is rejected as bad usage"
+    # delegates: decispec tests::filter_flags_parse_prefix_csv_and_reject_unknown_status
+  }
+}
+
+decision GATE-008 "A JUnit <skipped> case is a SKIPPED row, never a silent pass, and strict mode escalates it like any other skip" {
+  status: accepted
+  context: "Real toolchains report intentionally-unimplemented work with JUnit's <skipped/> element (Playwright's test.fixme and test.skip, pytest's @pytest.mark.skip), but the gate's parser only read failure/error children, so a skipped case was indistinguishable from a passing one — 86 false-green e2e rows in the tvgo port before TASH-515, per the user's retro table (F47, 2026-10-23). The fix sits in parse_junit: <skipped> becomes row evidence, and the row reuses the same skipped_outcome seam as toolchain skips so --strict-skipped escalates both with one policy."
+  consequences: "+ an intentionally skipped test is visible in the matrix and never inflates proof coverage, and CI strict mode reds it unless the project allowlists it (GATE-009). - a suite whose cases are ALL skipped now reads SKIPPED instead of the old coarse 'N passed', which can flip legacy projects' rows from pass to skipped until stubs are implemented or allowlisted — a one-time honest accounting, not a regression."
+}
+
+spec GATE-008 {
+  requirement GATE-008-R1 (EARS) {
+    text: "WHEN a JUnit testcase carries a <skipped> element THEN the mapped row SHALL be SKIPPED with the skip message in its detail and SHALL never be counted as passed"
+    layers: [unit]
+    scenarios: [junit_skipped_case_maps_to_skipped_row, suite_level_all_skipped_maps_to_skipped_row]
+  }
+  requirement GATE-008-R2 (EARS) {
+    text: "WHEN --strict-skipped is active THEN JUnit-evidenced skips SHALL escalate to FAIL with the strict detail, exactly like toolchain skips, and the NoArtifacts precedence SHALL be unchanged"
+    layers: [unit]
+    scenarios: [strict_skipped_escalates_junit_skips_to_fail]
+  }
+  scenario junit_skipped_case_maps_to_skipped_row {
+    given: "a JUnit case whose only deviation from passing is a <skipped> element"
+    when: "the gate maps it to its scenario row"
+    then: "the row is SKIPPED, the detail carries the skip message, and a non-strict verdict is not findings"
+    # delegates: decispec-gate tests::junit_skipped_case_maps_to_skipped_row
+  }
+  scenario suite_level_all_skipped_maps_to_skipped_row {
+    given: "a contract/e2e suite that fell back to whole-suite matching with every case skipped"
+    when: "the gate judges the suite as a whole"
+    then: "the row is SKIPPED, not the old 'N passed'"
+    # delegates: decispec-gate tests::suite_level_all_skipped_maps_to_skipped_row
+  }
+  scenario strict_skipped_escalates_junit_skips_to_fail {
+    given: "a row whose evidence is a JUnit-skipped case"
+    when: "the gate evaluates with --strict-skipped"
+    then: "the row fails with the strict detail, as toolchain skips already do"
+    # delegates: decispec-gate tests::strict_skipped_escalates_junit_skips_to_fail
+  }
+}
+
+decision GATE-009 "A skip allowlist relieves named rows from strict escalation, and drift is a warning" {
+  status: accepted
+  context: "Strict mode (GATE-002, GATE-008) turns every skip red, but a porting project carries known, intentional gaps for weeks. The user's retro table calls the allowlist 'the ratchet, and every project gets it': `decispec gate --allow-skips specs/skips.toml` names each row allowed to stay skipped, so CI is strict everywhere else. The file is a list of [[skips]] tables (decision, item, reason; requirement optional), versioned next to the specs it excuses."
+  consequences: "+ strict CI and honest stubs coexist: a gap is either implemented, allowlisted with a reason, or red — there is no silent fourth state. - one more hand-maintained file; an entry that matches no skipped row has drifted, so the gate warns on it instead of letting the list rot silently."
+}
+
+spec GATE-009 {
+  requirement GATE-009-R1 (EARS) {
+    text: "WHEN --allow-skips names a readable file and --strict-skipped is active THEN a skipped row matched by an entry SHALL remain SKIPPED with the allowance reason in its detail while every unmatched skipped row SHALL still escalate to FAIL"
+    layers: [unit]
+    scenarios: [allow_skips_relieves_listed_rows_only, gate_allow_skips_relieves_listed_skips_end_to_end]
+  }
+  requirement GATE-009-R2 (EARS) {
+    text: "WHEN the allowlist file is missing or unparseable THEN gate SHALL exit 2 without a verdict, and WHEN an entry matches no skipped row THEN the report SHALL carry a stale-allowance warning"
+    layers: [unit]
+    scenarios: [gate_allow_skips_missing_file_exits_2, allow_skips_warns_on_stale_entries]
+  }
+  scenario allow_skips_relieves_listed_rows_only {
+    given: "a strict run with two JUnit-skipped rows and an allowlist naming one of them"
+    when: "the gate evaluates"
+    then: "the listed row stays SKIPPED with its reason and the other fails"
+    # delegates: decispec-gate tests::allow_skips_relieves_listed_rows_only
+  }
+  scenario gate_allow_skips_relieves_listed_skips_end_to_end {
+    given: "a project whose only deviations are allowlisted skips"
+    when: "cmd_gate runs with --strict-skipped and --allow-skips"
+    then: "the process exits 0 and the verdict names the allowance"
+    # delegates: decispec (cli) tests::gate_allow_skips_relieves_listed_skips_end_to_end
+  }
+  scenario gate_allow_skips_missing_file_exits_2 {
+    given: "a --allow-skips path that does not exist"
+    when: "cmd_gate runs"
+    then: "it exits 2 because the ratchet cannot be read"
+    # delegates: decispec (cli) tests::gate_allow_skips_missing_file_exits_2
+  }
+  scenario allow_skips_warns_on_stale_entries {
+    given: "an allowlist whose entry matches no skipped row"
+    when: "the gate evaluates"
+    then: "the report carries a stale-allowance warning for that entry"
+    # delegates: decispec-gate tests::allow_skips_warns_on_stale_entries
+  }
+}

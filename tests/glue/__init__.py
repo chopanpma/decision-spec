@@ -8,12 +8,23 @@ A renamed or deleted Rust test fails loudly, never silently passes: the
 `--exact` filter matches nothing, cargo exits 0 with '0 passed', and the
 '1 passed' assertion below turns that into a glue failure.
 
-Every one of the workspace's 131 Rust tests is pinned to exactly one scenario
-(F28 + F29); regenerate specs and re-run `decispec gate` to re-verify.
+Every one of the workspace's 282 Rust tests is pinned to exactly one scenario
+(F28 + F29 + F33 + F36 + F26 + F38; F33 added the decispec-tui pins with their full module
+paths, e.g. `app::tests::…`, because the tui tests live in per-module
+`tests` submodules; F46 pinned the GEN-008 diagram-move tests; F47 pinned the
+GATE-008/009 skip-honesty tests; F48 pinned the PORT-001/002 portable-spec
+tests). The bijection is enforced mechanically by the F34
+self-check — the `every_rust_test_pinned_exactly_once` scenario below fails
+the gate on any unpinned test, ghost pin, or duplicate (core in
+pin_audit.py, unit-tested in test_pin_audit.py), so the hand-audit ceremony
+F29/F33 re-invented is retired. Regenerate specs and re-run `decispec gate`
+to re-verify.
 """
 
 import os
 import subprocess
+
+from . import pin_audit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CARGO = os.environ.get("CARGO", "cargo")
@@ -155,6 +166,36 @@ def junit_parsing_rejects_non_junit():
 
 def gate_exits_2_when_specs_are_broken():
     _delegate("decispec", "tests::gate_exits_2_when_specs_are_broken", target="--bins")
+
+
+# --- specs/010-gate.spec, GATE-007 (F39): console filters -------------------
+
+def gate_with_filters_prints_a_narrowed_matrix_but_exit_follows_verdict():
+    _delegate("decispec", "tests::gate_with_filters_prints_a_narrowed_matrix_but_exit_follows_verdict", target="--bins")
+
+
+def gate_json_with_prefix_filter_is_narrowed_while_report_json_stays_full():
+    _delegate("decispec", "tests::gate_json_with_prefix_filter_is_narrowed_while_report_json_stays_full", target="--bins")
+
+
+def prefix_filter_matches_only_named_decision_prefixes():
+    _delegate("decispec-gate", "tests::prefix_filter_matches_only_named_decision_prefixes")
+
+
+def status_filter_matches_only_that_decision_status():
+    _delegate("decispec-gate", "tests::status_filter_matches_only_that_decision_status")
+
+
+def only_failing_matches_fail_rows_and_only_uncovered_matches_uncovered():
+    _delegate("decispec-gate", "tests::only_failing_matches_fail_rows_and_only_uncovered_matches_uncovered")
+
+
+def empty_filter_matches_every_row():
+    _delegate("decispec-gate", "tests::empty_filter_matches_every_row")
+
+
+def filter_flags_parse_prefix_csv_and_reject_unknown_status():
+    _delegate("decispec", "tests::filter_flags_parse_prefix_csv_and_reject_unknown_status", target="--bins")
 
 
 # --- specs/020-codegen.spec (F29) ------------------------------------------
@@ -331,6 +372,40 @@ def parses_demo_spec():
 
 def demo_spec_validates_clean():
     _delegate("decispec-parse", "tests::demo_spec_validates_clean")
+
+
+# --- specs/030-parse.spec, DSL-004 (F26): check --strict style lint ----------
+
+def lint_flags_decisions_missing_context_or_consequences():
+    _delegate("decispec-parse", "tests::lint_flags_decisions_missing_context_or_consequences")
+
+
+def lint_flags_consequences_without_a_minus_entry():
+    _delegate("decispec-parse", "tests::lint_flags_consequences_without_a_minus_entry")
+
+
+def lint_flags_requirement_text_missing_ears_keywords():
+    _delegate("decispec-parse", "tests::lint_flags_requirement_text_missing_ears_keywords")
+
+
+def lint_flags_scenario_names_that_are_not_snake_case():
+    _delegate("decispec-parse", "tests::lint_flags_scenario_names_that_are_not_snake_case")
+
+
+def lint_flags_scenarios_never_listed_by_a_requirement():
+    _delegate("decispec-parse", "tests::lint_flags_scenarios_never_listed_by_a_requirement")
+
+
+def lint_reports_nothing_on_a_conforming_workspace():
+    _delegate("decispec-parse", "tests::lint_reports_nothing_on_a_conforming_workspace")
+
+
+def check_strict_reports_style_findings_and_exits_1():
+    _delegate("decispec", "tests::check_strict_reports_style_findings_and_exits_1", target="--bins")
+
+
+def check_without_strict_ignores_style_findings():
+    _delegate("decispec", "tests::check_without_strict_ignores_style_findings", target="--bins")
 
 
 # --- specs/040-commands.spec (F29) -----------------------------------------
@@ -565,3 +640,567 @@ def gate_status_reports_missing_and_parses_report():
 
 def extract_project_returns_decisions_and_containers():
     _delegate("decispec-mcp", "tests::extract_project_returns_decisions_and_containers")
+
+# --- specs/060-tui.spec (F33) ----------------------------------------------
+
+def to_toml_and_parse_round_trip():
+    _delegate("decispec-tui", "registry::tests::to_toml_and_parse_round_trip")
+
+
+def parse_ignores_comments_and_blank_lines():
+    _delegate("decispec-tui", "registry::tests::parse_ignores_comments_and_blank_lines")
+
+
+def parse_keeps_hash_inside_quotes():
+    _delegate("decispec-tui", "registry::tests::parse_keeps_hash_inside_quotes")
+
+
+def parse_errors_on_key_outside_project_block():
+    _delegate("decispec-tui", "registry::tests::parse_errors_on_key_outside_project_block")
+
+
+def parse_errors_on_unknown_key_with_line_number():
+    _delegate("decispec-tui", "registry::tests::parse_errors_on_unknown_key_with_line_number")
+
+
+def parse_errors_on_entry_missing_path():
+    _delegate("decispec-tui", "registry::tests::parse_errors_on_entry_missing_path")
+
+
+def parse_errors_on_garbage_line():
+    _delegate("decispec-tui", "registry::tests::parse_errors_on_garbage_line")
+
+
+def parse_empty_source_is_empty_registry():
+    _delegate("decispec-tui", "registry::tests::parse_empty_source_is_empty_registry")
+
+
+def upsert_replaces_same_name_and_same_path():
+    _delegate("decispec-tui", "registry::tests::upsert_replaces_same_name_and_same_path")
+
+
+def parses_a_full_report():
+    _delegate("decispec-tui", "snapshot::tests::parses_a_full_report")
+
+
+def parses_kebab_case_row_results():
+    _delegate("decispec-tui", "snapshot::tests::parses_kebab_case_row_results")
+
+
+def tolerates_missing_optional_fields():
+    _delegate("decispec-tui", "snapshot::tests::tolerates_missing_optional_fields")
+
+
+def ignores_unknown_fields():
+    _delegate("decispec-tui", "snapshot::tests::ignores_unknown_fields")
+
+
+def garbage_is_an_error():
+    _delegate("decispec-tui", "snapshot::tests::garbage_is_an_error")
+
+
+def new_app_starts_on_first_project_in_specs_mode():
+    _delegate("decispec-tui", "app::tests::new_app_starts_on_first_project_in_specs_mode")
+
+
+def empty_registry_says_so_in_status():
+    _delegate("decispec-tui", "app::tests::empty_registry_says_so_in_status")
+
+
+def right_and_left_switch_projects_and_clamp():
+    _delegate("decispec-tui", "app::tests::right_and_left_switch_projects_and_clamp")
+
+
+def switching_project_resets_selection_and_scroll():
+    _delegate("decispec-tui", "app::tests::switching_project_resets_selection_and_scroll")
+
+
+def tab_cycles_modes():
+    _delegate("decispec-tui", "app::tests::tab_cycles_modes")
+
+
+def down_clamps_to_decision_count():
+    _delegate("decispec-tui", "app::tests::down_clamps_to_decision_count")
+
+
+def artifact_files_render_in_memory_with_index_last():
+    _delegate("decispec-tui", "app::tests::artifact_files_render_in_memory_with_index_last")
+
+
+def artifact_files_empty_for_broken_project():
+    _delegate("decispec-tui", "app::tests::artifact_files_empty_for_broken_project")
+
+
+def q_quits_r_reloads_other_chars_do_nothing():
+    _delegate("decispec-tui", "app::tests::q_quits_r_reloads_other_chars_do_nothing")
+
+
+def enter_pages_scroll_and_esc_resets():
+    _delegate("decispec-tui", "app::tests::enter_pages_scroll_and_esc_resets")
+
+
+def status_counts_by_decision_level():
+    _delegate("decispec-tui", "app::tests::status_counts_by_decision_level")
+
+
+def layer_counts_requirements_per_layer():
+    _delegate("decispec-tui", "app::tests::layer_counts_requirements_per_layer")
+
+
+def specs_mode_shows_projects_decisions_and_detail():
+    _delegate("decispec-tui", "views::tests::specs_mode_shows_projects_decisions_and_detail")
+
+
+def broken_project_shows_its_error_not_a_panic():
+    _delegate("decispec-tui", "views::tests::broken_project_shows_its_error_not_a_panic")
+
+
+def artifacts_mode_lists_generated_files_and_content():
+    _delegate("decispec-tui", "views::tests::artifacts_mode_lists_generated_files_and_content")
+
+
+def dashboard_shows_levels_layers_and_gate_verdict():
+    _delegate("decispec-tui", "views::tests::dashboard_shows_levels_layers_and_gate_verdict")
+
+
+# --- specs/040-commands.spec, CMD-007 (F33) ----------------------------------
+
+def tui_subcommand_parses():
+    _delegate("decispec", "tests::tui_subcommand_parses", target="--bins")
+
+
+def tui_register_adds_project_and_persists_registry():
+    _delegate("decispec", "tests::tui_register_adds_project_and_persists_registry", target="--bins")
+
+
+def tui_register_rejects_a_non_project_dir():
+    _delegate("decispec", "tests::tui_register_rejects_a_non_project_dir", target="--bins")
+
+
+def tui_load_or_seed_writes_registry_on_first_run():
+    _delegate("decispec", "tests::tui_load_or_seed_writes_registry_on_first_run", target="--bins")
+
+
+def tui_registry_seeding_suggests_only_existing_dirs():
+    _delegate("decispec", "tests::tui_registry_seeding_suggests_only_existing_dirs", target="--bins")
+
+
+def tui_expand_home_leaves_absolute_and_plain_paths_alone():
+    _delegate("decispec", "tests::tui_expand_home_leaves_absolute_and_plain_paths_alone", target="--bins")
+
+
+def tui_load_project_keeps_broken_specs_as_error_state():
+    _delegate("decispec", "tests::tui_load_project_keeps_broken_specs_as_error_state", target="--bins")
+
+
+def tui_load_project_reads_gate_report_when_present():
+    _delegate("decispec", "tests::tui_load_project_reads_gate_report_when_present", target="--bins")
+
+
+def tui_translate_event_maps_presses_only():
+    _delegate("decispec", "tests::tui_translate_event_maps_presses_only", target="--bins")
+
+# --- specs/060-tui.spec, editor + PR flow (F33 pins F32's tests) -------------
+
+def e_opens_the_file_picker():
+    _delegate("decispec-tui", "app::tests::e_opens_the_file_picker")
+
+
+def picker_lists_only_spec_sources():
+    _delegate("decispec-tui", "app::tests::picker_lists_only_spec_sources")
+
+
+def enter_loads_file_text_clean():
+    _delegate("decispec-tui", "app::tests::enter_loads_file_text_clean")
+
+
+def picker_shows_live_diagnostics_for_broken_files():
+    _delegate("decispec-tui", "app::tests::picker_shows_live_diagnostics_for_broken_files")
+
+
+def typing_marks_dirty_recomputes_diagnostics_and_cannot_quit():
+    _delegate("decispec-tui", "app::tests::typing_marks_dirty_recomputes_diagnostics_and_cannot_quit")
+
+
+def ctrl_s_saves_only_a_dirty_buffer():
+    _delegate("decispec-tui", "app::tests::ctrl_s_saves_only_a_dirty_buffer")
+
+
+def mark_saved_clears_dirty():
+    _delegate("decispec-tui", "app::tests::mark_saved_clears_dirty")
+
+
+def esc_confirms_before_discarding_dirty_buffer():
+    _delegate("decispec-tui", "app::tests::esc_confirms_before_discarding_dirty_buffer")
+
+
+def editing_after_confirm_disarms_it():
+    _delegate("decispec-tui", "app::tests::editing_after_confirm_disarms_it")
+
+
+def p_requests_a_pr_for_a_loaded_project():
+    _delegate("decispec-tui", "app::tests::p_requests_a_pr_for_a_loaded_project")
+
+
+def new_editor_starts_clean_at_origin():
+    _delegate("decispec-tui", "editor::tests::new_editor_starts_clean_at_origin")
+
+
+def insert_char_appends_at_cursor():
+    _delegate("decispec-tui", "editor::tests::insert_char_appends_at_cursor")
+
+
+def insert_unicode_is_char_safe():
+    _delegate("decispec-tui", "editor::tests::insert_unicode_is_char_safe")
+
+
+def newline_splits_line_and_moves_down():
+    _delegate("decispec-tui", "editor::tests::newline_splits_line_and_moves_down")
+
+
+def backspace_deletes_char_then_joins_lines():
+    _delegate("decispec-tui", "editor::tests::backspace_deletes_char_then_joins_lines")
+
+
+def backspace_at_origin_is_a_noop():
+    _delegate("decispec-tui", "editor::tests::backspace_at_origin_is_a_noop")
+
+
+def delete_removes_char_then_joins_with_next_line():
+    _delegate("decispec-tui", "editor::tests::delete_removes_char_then_joins_with_next_line")
+
+
+def arrow_moves_clamp_at_boundaries():
+    _delegate("decispec-tui", "editor::tests::arrow_moves_clamp_at_boundaries")
+
+
+def home_and_end():
+    _delegate("decispec-tui", "editor::tests::home_and_end")
+
+
+def page_moves_by_height_and_clamps():
+    _delegate("decispec-tui", "editor::tests::page_moves_by_height_and_clamps")
+
+
+def scroll_keeps_cursor_visible():
+    _delegate("decispec-tui", "editor::tests::scroll_keeps_cursor_visible")
+
+
+def validate_clean_edit_reports_nothing():
+    _delegate("decispec-tui", "editor::tests::validate_clean_edit_reports_nothing")
+
+
+def validate_reports_parse_error_phase_first():
+    _delegate("decispec-tui", "editor::tests::validate_reports_parse_error_phase_first")
+
+
+def validate_reports_cross_file_reference_problems():
+    _delegate("decispec-tui", "editor::tests::validate_reports_cross_file_reference_problems")
+
+
+def validate_reports_broken_sibling_files():
+    _delegate("decispec-tui", "editor::tests::validate_reports_broken_sibling_files")
+
+
+def validate_flags_undeclared_flow_participants():
+    _delegate("decispec-tui", "editor::tests::validate_flags_undeclared_flow_participants")
+
+
+def editor_picker_lists_spec_files():
+    _delegate("decispec-tui", "views::tests::editor_picker_lists_spec_files")
+
+
+def editor_shows_text_diagnostics_and_discard_warning():
+    _delegate("decispec-tui", "views::tests::editor_shows_text_diagnostics_and_discard_warning")
+
+# --- specs/040-commands.spec, CMD-008 (F33 pins F32's save/PR tests) ---------
+
+def translate_event_maps_editor_keys_and_ctrl():
+    _delegate("decispec", "tests::translate_event_maps_editor_keys_and_ctrl", target="--bins")
+
+
+def save_spec_file_writes_and_reports_workspace_health():
+    _delegate("decispec", "tests::save_spec_file_writes_and_reports_workspace_health", target="--bins")
+
+
+def pr_readiness_flags_non_git_clean_tree_and_missing_gh():
+    _delegate("decispec", "tests::pr_readiness_flags_non_git_clean_tree_and_missing_gh", target="--bins")
+
+
+def pr_branch_name_is_utc_timestamped():
+    _delegate("decispec", "tests::pr_branch_name_is_utc_timestamped", target="--bins")
+
+
+def create_spec_pr_commits_pushes_then_reports_gh_failure():
+    _delegate("decispec", "tests::create_spec_pr_commits_pushes_then_reports_gh_failure", target="--bins")
+
+
+def create_spec_pr_refuses_changes_outside_specs_and_restores():
+    _delegate("decispec", "tests::create_spec_pr_refuses_changes_outside_specs_and_restores", target="--bins")
+
+
+def save_spec_file_creates_new_file_and_parent_dirs():
+    _delegate("decispec", "tests::save_spec_file_creates_new_file_and_parent_dirs", target="--bins")
+
+
+def save_spec_file_refuses_paths_outside_specs():
+    _delegate("decispec", "tests::save_spec_file_refuses_paths_outside_specs", target="--bins")
+
+
+# --- specs/040-commands.spec, CMD-009 (F40): query glob patterns ------------
+
+def query_glob_match_follows_wildcard_semantics():
+    _delegate("decispec", "tests::query_glob_match_follows_wildcard_semantics", target="--bins")
+
+
+def query_pattern_selects_decisions_and_status_filters():
+    _delegate("decispec", "tests::query_pattern_selects_decisions_and_status_filters", target="--bins")
+
+
+def query_pattern_with_no_match_exits_1():
+    _delegate("decispec", "tests::query_pattern_with_no_match_exits_1", target="--bins")
+
+
+def query_exact_id_and_star_pattern_both_exit_0():
+    _delegate("decispec", "tests::query_exact_id_and_star_pattern_both_exit_0", target="--bins")
+
+
+# --- specs/040-commands.spec, CMD-010 (F41): gen --only ---------------------
+
+def gen_only_writes_matching_artifacts_and_skips_the_sweep():
+    _delegate("decispec", "tests::gen_only_writes_matching_artifacts_and_skips_the_sweep", target="--bins")
+
+
+def render_all_for_selects_only_matching_spec_artifacts():
+    _delegate("decispec-codegen", "tests::render_all_for_selects_only_matching_spec_artifacts")
+
+
+def gen_only_with_unmatched_prefix_exits_1_and_writes_nothing():
+    _delegate("decispec", "tests::gen_only_with_unmatched_prefix_exits_1_and_writes_nothing", target="--bins")
+
+
+def render_all_for_with_no_prefixes_equals_render_all():
+    _delegate("decispec-codegen", "tests::render_all_for_with_no_prefixes_equals_render_all")
+
+
+# --- specs/060-tui.spec TUI-006 (F36): new spec file creation ---------------
+
+def e_on_project_without_specs_opens_naming_directly():
+    _delegate("decispec-tui", "app::tests::e_on_project_without_specs_opens_naming_directly")
+
+
+def picker_n_opens_naming_and_esc_returns_to_picker():
+    _delegate("decispec-tui", "app::tests::picker_n_opens_naming_and_esc_returns_to_picker")
+
+
+def esc_in_naming_with_no_files_closes_the_editor():
+    _delegate("decispec-tui", "app::tests::esc_in_naming_with_no_files_closes_the_editor")
+
+
+def naming_enter_opens_editor_on_parseable_skeleton():
+    _delegate("decispec-tui", "app::tests::naming_enter_opens_editor_on_parseable_skeleton")
+
+
+def naming_enter_refuses_invalid_names_and_stays_in_naming():
+    _delegate("decispec-tui", "app::tests::naming_enter_refuses_invalid_names_and_stays_in_naming")
+
+
+def skeleton_for_new_file_parses_clean():
+    _delegate("decispec-tui", "editor::tests::skeleton_for_new_file_parses_clean")
+
+
+# --- specs/070-proof.spec (F38): proof coverage -------------------------------
+
+def coverage_uses_last_report_without_running_toolchains():
+    _delegate("decispec-gate", "coverage::tests::report_coverage_rolls_up_its_own_decisions")
+
+
+def coverage_without_a_gate_report_exits_2():
+    _delegate("decispec", "tests::coverage_without_a_gate_report_exits_2", target="--bins")
+    _delegate("decispec", "tests::coverage_with_corrupt_report_exits_2", target="--bins")
+
+
+def coverage_names_the_run_it_reflects():
+    _delegate("decispec", "tests::format_utc_converts_known_epochs", target="--bins")
+
+
+def every_passing_row_marks_the_decision_proven():
+    _delegate("decispec-gate", "coverage::tests::every_passing_row_marks_the_decision_proven")
+
+
+def one_failing_row_marks_the_decision_partial():
+    _delegate("decispec-gate", "coverage::tests::one_failing_row_marks_the_decision_partial")
+
+
+def a_skipped_row_is_not_proof():
+    _delegate("decispec-gate", "coverage::tests::a_skipped_row_is_not_proof")
+
+
+def a_decision_with_no_rows_is_unproven():
+    _delegate("decispec-gate", "coverage::tests::a_decision_with_no_rows_is_unproven")
+
+
+def superseded_and_rejected_decisions_are_excluded():
+    _delegate("decispec-gate", "coverage::tests::superseded_and_rejected_decisions_are_excluded")
+
+
+def headline_counts_decisions_not_scenarios():
+    _delegate("decispec-gate", "coverage::tests::headline_counts_decisions_not_scenarios")
+    _delegate("decispec-gate", "coverage::tests::empty_workspace_reports_zero_not_nan")
+
+
+def coverage_prints_marked_lines_and_headline():
+    _delegate("decispec", "tests::coverage_prints_marked_lines_and_headline", target="--bins")
+
+
+def coverage_below_the_min_floor_exits_1():
+    _delegate("decispec", "tests::coverage_below_the_min_floor_exits_1", target="--bins")
+
+
+def gate_summary_prints_the_proven_percentage():
+    _delegate("decispec", "tests::gate_summary_prints_the_proven_percentage", target="--bins")
+
+
+def tui_marks_each_decision_with_its_proof_state():
+    _delegate("decispec-tui", "views::tests::tui_marks_each_decision_with_its_proof_state")
+    _delegate("decispec-tui", "snapshot::tests::coverage_rolls_up_mirror_rows")
+
+
+def tui_dashboard_shows_the_headline_percentage():
+    _delegate("decispec-tui", "views::tests::tui_dashboard_shows_the_headline_percentage")
+
+
+def tui_shows_no_gate_run_instead_of_a_fake_zero():
+    _delegate("decispec-tui", "views::tests::tui_shows_no_gate_run_instead_of_a_fake_zero")
+
+
+# --- specs/060-tui.spec TUI-007 (F42): picker type-to-filter -----------------
+
+def picker_slash_enters_filter_mode_and_typing_narrows_to_the_match():
+    _delegate("decispec-tui", "app::tests::picker_slash_enters_filter_mode_and_typing_narrows_to_the_match")
+
+
+def picker_filter_is_case_insensitive_and_selection_anchors_to_top():
+    _delegate("decispec-tui", "app::tests::picker_filter_is_case_insensitive_and_selection_anchors_to_top")
+
+
+def picker_esc_clears_filter_then_closes_and_n_still_names():
+    _delegate("decispec-tui", "app::tests::picker_esc_clears_filter_then_closes_and_n_still_names")
+
+
+def picker_filter_line_shows_query_and_match_count():
+    _delegate("decispec-tui", "views::tests::picker_filter_line_shows_query_and_match_count")
+
+
+# --- specs/060-tui.spec TUI-008 (F43): specs-view decision filter -------------
+
+def tui_slash_engages_decision_filter_and_typing_narrows():
+    _delegate("decispec-tui", "app::tests::tui_slash_engages_decision_filter_and_typing_narrows")
+
+
+def tui_decision_filter_is_case_insensitive_and_reanchors_selection():
+    _delegate("decispec-tui", "app::tests::tui_decision_filter_is_case_insensitive_and_reanchors_selection")
+
+
+def tui_esc_clears_decision_filter_and_normal_keys_resume():
+    _delegate("decispec-tui", "app::tests::tui_esc_clears_decision_filter_and_normal_keys_resume")
+
+
+def tui_switching_project_resets_decision_filter():
+    _delegate("decispec-tui", "app::tests::tui_switching_project_resets_decision_filter")
+    _delegate("decispec-tui", "app::tests::tui_tab_resets_decision_filter_with_the_rest_of_the_view")
+
+
+def specs_view_shows_filter_line_and_narrows_rows():
+    _delegate("decispec-tui", "views::tests::specs_view_shows_filter_line_and_narrows_rows")
+
+
+# --- specs/020-codegen.spec GEN-008 (F46): diagrams under .decispec ----------
+
+def gen_writes_diagrams_under_decispec_dir():
+    _delegate("decispec", "tests::gen_writes_diagrams_under_decispec_dir_not_docs", target="--bins")
+    _delegate("decispec-codegen", "tests::diagram_artifacts_live_under_decispec_dir")
+
+
+def gen_migrates_committed_diagrams_out_of_docs_diagrams():
+    _delegate("decispec", "tests::sweep_migrates_header_diagrams_out_of_docs_diagrams", target="--bins")
+
+
+def gen_diagrams_regeneration_is_byte_identical():
+    _delegate("decispec", "tests::gen_twice_keeps_diagram_bytes_identical", target="--bins")
+
+
+def sweep_treats_decispec_diagrams_as_the_managed_tree():
+    _delegate("decispec", "tests::sweep_removes_stale_diagrams_from_decispec_dir_only", target="--bins")
+
+
+# --- specs/010-gate.spec GATE-008/009 + 020 GEN-003 (F47): skip honesty -----
+
+def junit_skipped_case_maps_to_skipped_row():
+    _delegate("decispec-gate", "tests::junit_skipped_case_maps_to_skipped_row")
+
+
+def suite_level_all_skipped_maps_to_skipped_row():
+    _delegate("decispec-gate", "tests::suite_level_all_skipped_maps_to_skipped_row")
+
+
+def strict_skipped_escalates_junit_skips_to_fail():
+    _delegate("decispec-gate", "tests::strict_skipped_escalates_junit_skips_to_fail")
+
+
+def allow_skips_relieves_listed_rows_only():
+    _delegate("decispec-gate", "tests::allow_skips_relieves_listed_rows_only")
+
+
+def allow_skips_warns_on_stale_entries():
+    _delegate("decispec-gate", "tests::allow_skips_warns_on_stale_entries")
+
+
+def gate_allow_skips_relieves_listed_skips_end_to_end():
+    _delegate("decispec", "tests::gate_allow_skips_relieves_listed_skips_end_to_end", target="--bins")
+
+
+def gate_allow_skips_missing_file_exits_2():
+    _delegate("decispec", "tests::gate_allow_skips_missing_file_exits_2", target="--bins")
+
+
+def playwright_stub_marks_fixme_not_silent_pass():
+    _delegate("decispec-codegen", "tests::playwright_stub_marks_fixme_not_silent_pass")
+
+
+# --- specs/080-portable.spec PORT-001/002 (F48): portable specs --------------
+
+def extract_to_writes_named_spec_outside_the_repo():
+    _delegate("decispec", "tests::extract_to_writes_named_spec_outside_the_repo", target="--bins")
+
+
+def extract_to_refuses_to_overwrite_existing_file():
+    _delegate("decispec", "tests::extract_to_refuses_to_overwrite_existing_file", target="--bins")
+
+
+def extract_to_and_stdout_are_mutually_exclusive():
+    _delegate("decispec", "tests::extract_to_and_stdout_are_mutually_exclusive", target="--bins")
+
+
+def init_from_files_and_dirs_scaffolds_a_project():
+    _delegate("decispec", "tests::init_from_files_and_dirs_scaffolds_a_project", target="--bins")
+
+
+def init_from_refuses_to_clobber_existing_specs():
+    _delegate("decispec", "tests::init_from_refuses_to_clobber_existing_specs", target="--bins")
+
+
+def init_from_broken_specs_exit_2_naming_diagnostics():
+    _delegate("decispec", "tests::init_from_broken_specs_exit_2_naming_diagnostics", target="--bins")
+
+
+# --- specs/000-decisions.spec DOG-001 (F34): the pin self-check ------------
+# No single Rust test to delegate to — the scenario IS the end-to-end check:
+# enumerate the workspace, extract every pin above, assert the bijection.
+
+def every_rust_test_pinned_exactly_once():
+    enumerated = pin_audit.enumerate_workspace(CARGO, ROOT)
+    with open(os.path.join(ROOT, "tests/glue/__init__.py")) as f:
+        glue_source = f.read()
+    problems = pin_audit.audit_pins(enumerated, pin_audit.extract_pins(glue_source))
+    assert not problems, "pin self-check failed:\n" + "\n".join(problems)

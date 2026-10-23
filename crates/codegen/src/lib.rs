@@ -49,7 +49,7 @@ impl Default for CodegenConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedFile {
-    /// Project-relative path with forward slashes, e.g. `docs/diagrams/x.mmd`.
+    /// Project-relative path with forward slashes, e.g. `.decispec/diagrams/x.mmd`.
     pub path: String,
     pub content: String,
 }
@@ -279,7 +279,10 @@ pub fn render_index(ws: &Workspace) -> GeneratedFile {
         }
     }
 
-    let path = "docs/decisions.md".to_string();
+    // F49: the default lives in the gitignored generated area (like
+    // .decispec/diagrams/) — the index is generated output, so it must not
+    // default into the tracked docs/ tree; --out overrides.
+    let path = ".decispec/docs/decisions.md".to_string();
     // HTML-comment form of the generated header: invisible in GitHub's
     // rendered view, where the H1 above must stay the document title.
     let content = format!("<!-- {} -->\n{}", HEADER_TEXT.trim(), body);
@@ -453,7 +456,7 @@ pub fn playwright_spec(spec: &Spec, scenario: &decispec_ir::Scenario) -> Generat
     let path = format!("tests/generated/e2e/{}", names::e2e_spec_file(&scenario.id));
     let body = format!(
         "import {{ test, expect }} from '@playwright/test';\n\n\
-         test('{spec_id} {scen_id}', async ({{ page }}) => {{\n\
+         test.fixme('{spec_id} {scen_id}', async ({{ page }}) => {{\n\
          \x20   // TODO per spec: {then}\n\
          }});\n",
         spec_id = spec.id,
@@ -633,37 +636,67 @@ fn depcruise_path_segment(id: &str) -> String {
 // ---------------------------------------------------------------------------
 
 pub fn render_all(ws: &Workspace, cfg: &CodegenConfig) -> Vec<GeneratedFile> {
+    render_all_impl(ws, cfg, None)
+}
+
+/// [`render_all`] restricted to specs whose id starts with one of
+/// `prefixes` (F41, `decispec gen --only`). Workspace-scoped outputs —
+/// model/flow diagrams, the shared conftest, fitness configs — are skipped
+/// under a prefix filter; an empty list renders everything.
+pub fn render_all_for(
+    ws: &Workspace,
+    cfg: &CodegenConfig,
+    prefixes: &[String],
+) -> Vec<GeneratedFile> {
+    if prefixes.is_empty() {
+        return render_all(ws, cfg);
+    }
+    render_all_impl(ws, cfg, Some(prefixes))
+}
+
+fn render_all_impl(
+    ws: &Workspace,
+    cfg: &CodegenConfig,
+    only: Option<&[String]>,
+) -> Vec<GeneratedFile> {
     let mut out: Vec<GeneratedFile> = Vec::new();
 
     // Diagrams: one sequence diagram per flow, one component diagram per model.
-    for m in &ws.models {
-        for flow in &m.flows {
+    if only.is_none() {
+        for m in &ws.models {
+            for flow in &m.flows {
+                out.push(file(
+                    format!(".decispec/diagrams/{}.mmd", flow.id),
+                    mermaid_flow(flow),
+                ));
+                out.push(file(
+                    format!(".decispec/diagrams/{}.puml", flow.id),
+                    plantuml_flow(flow),
+                ));
+            }
+        }
+        let has_model = ws
+            .models
+            .iter()
+            .any(|m| !m.containers.is_empty() || !m.rels.is_empty());
+        if has_model {
             out.push(file(
-                format!("docs/diagrams/{}.mmd", flow.id),
-                mermaid_flow(flow),
+                ".decispec/diagrams/model.mmd".to_string(),
+                mermaid_model(ws),
             ));
             out.push(file(
-                format!("docs/diagrams/{}.puml", flow.id),
-                plantuml_flow(flow),
+                ".decispec/diagrams/model.puml".to_string(),
+                plantuml_model(ws),
             ));
         }
     }
-    let has_model = ws
-        .models
-        .iter()
-        .any(|m| !m.containers.is_empty() || !m.rels.is_empty());
-    if has_model {
-        out.push(file(
-            "docs/diagrams/model.mmd".to_string(),
-            mermaid_model(ws),
-        ));
-        out.push(file(
-            "docs/diagrams/model.puml".to_string(),
-            plantuml_model(ws),
-        ));
-    }
 
     for spec in &ws.specs {
+        if only.is_some_and(|prefixes| {
+            !prefixes.iter().any(|p| spec.id.starts_with(p.as_str()))
+        }) {
+            continue;
+        }
         // unit layer
         for scen in &spec.scenarios {
             if spec.layers_for_scenario(&scen.id).contains(&Layer::Unit) {
@@ -711,17 +744,18 @@ pub fn render_all(ws: &Workspace, cfg: &CodegenConfig) -> Vec<GeneratedFile> {
             }
         }
     }
-    if ws
-        .specs
-        .iter()
-        .flat_map(|s| s.infra_policies.iter())
-        .any(|p| p.layers.contains(&Layer::Infra))
+    if only.is_none()
+        && ws
+            .specs
+            .iter()
+            .flat_map(|s| s.infra_policies.iter())
+            .any(|p| p.layers.contains(&Layer::Infra))
     {
         out.push(conftest_toml());
     }
 
     // fitness layer
-    if ws.all_rels().next().is_some() {
+    if only.is_none() && ws.all_rels().next().is_some() {
         out.push(importlinter(ws, cfg));
         out.push(depcruise(ws, cfg));
     }
@@ -740,13 +774,19 @@ pub fn has_generated_header(path: &str, content: &str) -> bool {
 }
 
 /// True for project-relative paths (forward slashes) that live in a tree
-/// `decispec gen` manages: files directly under `docs/diagrams/`, or
-/// anywhere under `tests/generated/<layer>/` for a known layer. Deliberately
-/// conservative: `tests/generated/results/` (run manifests, written by
-/// `decispec test`), files directly under `tests/generated/` and everything
-/// under `tests/glue/` are never managed.
+/// `decispec gen` manages: files directly under `.decispec/diagrams/`, or
+/// anywhere under `tests/generated/<layer>/` for a known layer. The legacy
+/// diagram tree `docs/diagrams/` is still managed — the sweep removes its
+/// header-bearing files as a one-time GEN-008 migration, but gen never
+/// writes there anymore. Deliberately conservative:
+/// `tests/generated/results/` (run manifests, written by `decispec test`),
+/// files directly under `tests/generated/` and everything under
+/// `tests/glue/` are never managed.
 pub fn is_managed_path(rel: &str) -> bool {
     let parts: Vec<&str> = rel.split('/').collect();
+    if let [".decispec", "diagrams", file] = parts.as_slice() {
+        return !file.is_empty();
+    }
     if let ["docs", "diagrams", file] = parts.as_slice() {
         return !file.is_empty();
     }
@@ -957,7 +997,7 @@ mod tests {
         let generated = render_all(&ws, &CodegenConfig::default());
         let mmd = generated
             .iter()
-            .find(|f| f.path == "docs/diagrams/svc_auth.mmd")
+            .find(|f| f.path == ".decispec/diagrams/svc_auth.mmd")
             .expect("svc_auth.mmd missing");
         assert!(mmd.content.starts_with("%% GENERATED BY DECISIONSPEC v0.1"));
         assert!(mmd.content.contains(expected));
@@ -1016,7 +1056,7 @@ mod tests {
         let generated = render_all(&ws, &CodegenConfig::default());
         let mmd = generated
             .iter()
-            .find(|f| f.path == "docs/diagrams/model.mmd")
+            .find(|f| f.path == ".decispec/diagrams/model.mmd")
             .expect("model.mmd missing");
         assert!(mmd.content.contains("flowchart LR\n"));
         assert!(mmd.content.contains("api[\"Orders API\"]"));
@@ -1024,10 +1064,34 @@ mod tests {
         assert!(mmd.content.contains("api -->|requests token| auth"));
         let puml = generated
             .iter()
-            .find(|f| f.path == "docs/diagrams/model.puml")
+            .find(|f| f.path == ".decispec/diagrams/model.puml")
             .expect("model.puml missing");
         assert!(puml.content.contains("[Orders API] as api"));
         assert!(puml.content.contains("api --> auth : requests token"));
+    }
+
+    // GEN-008 (F46): the diagram tree moved to .decispec/diagrams; nothing
+    // gen renders may land under docs/ anymore.
+    #[test]
+    fn diagram_artifacts_live_under_decispec_dir() {
+        let ws = decispec_parse_for_tests::parse_demo();
+        let generated = render_all(&ws, &CodegenConfig::default());
+        let diagrams: Vec<&GeneratedFile> = generated
+            .iter()
+            .filter(|f| f.path.ends_with(".mmd") || f.path.ends_with(".puml"))
+            .collect();
+        assert_eq!(diagrams.len(), 4, "demo renders flow mmd/puml + model mmd/puml");
+        for d in &diagrams {
+            assert!(
+                d.path.starts_with(".decispec/diagrams/"),
+                "{} must live under .decispec/diagrams",
+                d.path
+            );
+        }
+        assert!(
+            generated.iter().all(|f| !f.path.starts_with("docs/")),
+            "no artifact may render under docs/ after GEN-008"
+        );
     }
 
     // F19/F23: rel labels with parens break Mermaid flowchart parsing; a raw
@@ -1118,7 +1182,9 @@ mod tests {
     fn index_renders_title_mermaid_fences_and_tables() {
         let ws = decispec_parse_for_tests::parse_demo();
         let f = render_index(&ws);
-        assert_eq!(f.path, "docs/decisions.md");
+        // F49: the default lives in the gitignored generated area, never in
+        // the tracked docs/ tree.
+        assert_eq!(f.path, ".decispec/docs/decisions.md");
         assert!(f.content.contains("# Decision Index\n"), "{}", f.content);
         assert!(f.content.contains("do not edit"), "{}", f.content);
         // per-model section: source file heading, containers table, diagram
@@ -1269,7 +1335,7 @@ mod tests {
             .expect("playwright spec missing");
         assert!(
             pw.content
-                .contains("test('AUTH-001 valid_token', async ({ page }) => {")
+                .contains("test.fixme('AUTH-001 valid_token', async ({ page }) => {")
         );
 
         let rego = generated
@@ -1318,9 +1384,25 @@ mod tests {
             f.content,
             "// GENERATED BY DECISIONSPEC v0.1 — DO NOT EDIT. Edit specs/*.spec instead.\n\
              import { test, expect } from '@playwright/test';\n\n\
-             test('AUTH-001 valid_token', async ({ page }) => {\n\
+             test.fixme('AUTH-001 valid_token', async ({ page }) => {\n\
              \x20   // TODO per spec: the response status is 200 and a token is returned\n\
              });\n"
+        );
+    }
+
+    #[test]
+    fn playwright_stub_marks_fixme_not_silent_pass() {
+        // An unimplemented e2e stub must report <skipped> through Playwright
+        // (test.fixme), never pass on an empty body — the 86 false greens.
+        let ws = decispec_parse_for_tests::parse_demo();
+        let spec = ws.spec_for_decision("AUTH-001").expect("spec missing");
+        let scenario = spec.scenario("valid_token").expect("scenario missing");
+        let f = playwright_spec(spec, scenario);
+        assert!(
+            f.content
+                .contains("test.fixme('AUTH-001 valid_token', async ({ page }) => {"),
+            "stub must be declared test.fixme so the toolchain reports it skipped, got:\n{}",
+            f.content
         );
     }
 
@@ -1646,8 +1728,9 @@ mod tests {
     #[test]
     fn managed_paths_cover_only_gen_output_trees() {
         for p in [
-            "docs/diagrams/svc_auth.mmd",
-            "docs/diagrams/model.puml",
+            ".decispec/diagrams/svc_auth.mmd",
+            ".decispec/diagrams/model.puml",
+            "docs/diagrams/model.mmd", // legacy tree: swept for GEN-008 migration
             "tests/generated/unit/test_AUTH_001_valid_token.py",
             "tests/generated/unit/rust/AUTH-001.rs",
             "tests/generated/contract/AUTH-001.feature",
@@ -1660,7 +1743,8 @@ mod tests {
             assert!(is_managed_path(p), "{p} should be managed");
         }
         for p in [
-            "docs/diagrams/nested/x.mmd", // gen writes flat diagram files only
+            ".decispec/diagrams/nested/x.mmd", // gen writes flat diagram files only
+            "docs/diagrams/nested/x.mmd",      // legacy tree is flat-only too
             "docs/README.md",
             "tests/generated/results/manifest.json", // run manifests, not codegen output
             "tests/generated/results/pytest.xml",
@@ -1703,5 +1787,66 @@ mod tests {
             "tests/generated/unit/x.py",
             &late_header
         ));
+    }
+
+    // -- F41: gen --only ----------------------------------------------------
+
+    #[test]
+    fn render_all_for_selects_only_matching_spec_artifacts() {
+        let mut ws = decispec_parse_for_tests::parse_demo();
+        let mut other = ws.specs[0].clone();
+        other.id = "TUI-001".to_string();
+        ws.specs.push(other);
+        let cfg = CodegenConfig::default();
+
+        let full = render_all(&ws, &cfg);
+        let only = render_all_for(&ws, &cfg, &["AUTH".to_string()]);
+
+        assert!(!only.is_empty(), "matching spec must yield artifacts");
+        for f in &only {
+            assert!(
+                full.contains(f),
+                "{} only exists under --only",
+                f.path
+            );
+            assert!(
+                !f.path.starts_with(".decispec/diagrams/"),
+                "workspace diagram {} must be skipped",
+                f.path
+            );
+            assert!(
+                !f.path.contains("TUI-001") && !f.path.contains("tui_001"),
+                "non-matching spec artifact {} must be skipped",
+                f.path
+            );
+            assert!(
+                f.path != "tests/generated/infra/conftest.toml",
+                "shared conftest must be skipped"
+            );
+            assert!(
+                !f.path.contains("fitness"),
+                "workspace fitness output {} must be skipped",
+                f.path
+            );
+        }
+        assert!(
+            only.iter().any(|f| f.path.contains("AUTH_001")),
+            "the matching spec's unit artifacts must be present"
+        );
+        // The full render still carries everything.
+        assert!(full.iter().any(|f| f.path.starts_with(".decispec/diagrams/")));
+        assert!(full.iter().any(|f| f.path.contains("TUI-001") || f.path.contains("tui_001")));
+        assert!(full.iter().any(|f| f.path == "tests/generated/infra/conftest.toml"));
+        assert!(full.iter().any(|f| f.path.contains("fitness")));
+    }
+
+    #[test]
+    fn render_all_for_with_no_prefixes_equals_render_all() {
+        let ws = decispec_parse_for_tests::parse_demo();
+        let cfg = CodegenConfig::default();
+        let full = render_all(&ws, &cfg);
+        let unfiltered = render_all_for(&ws, &cfg, &[]);
+        assert!(!full.is_empty());
+        assert_eq!(full, unfiltered);
     }
 }

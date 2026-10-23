@@ -393,3 +393,249 @@ spec CMD-006 {
   }
 }
 
+
+decision CMD-007 "decispec tui owns the terminal, the registry file, and project loading — registered projects stay read-only" {
+  status: accepted
+  context: "F31 (2026-10-20, AGENT_TEAMS.md §6/§12): cli owns crossterm setup/teardown, the registry file at $XDG_CONFIG_HOME/decispec/registry.toml, first-run seeding of well-known projects that exist on the machine, and --register resolving the project name from the target's decispec.toml. Broken workspaces load as error-state cards instead of aborting the cockpit, and tui exits 0 on clean quit, 2 on setup failure — never 1 (decided 2026-10-20, §12)."
+  consequences: "+ registered projects are read-only by construction: the TUI never writes into them and never runs their toolchains, and one broken project cannot take down the fleet view. - every registry/loading behavior lives only in the cli seam (no tui-crate API), and exit codes 0/2 were verified by a real-pty smoke rather than an automated test."
+}
+
+spec CMD-007 {
+  requirement CMD-007-R1 (EARS) {
+    text: "WHEN the tui subcommand is invoked or a project is registered THEN `decispec tui` SHALL parse with register absent, `decispec tui --register <dir>` SHALL parse with register present, registering SHALL resolve the project name from the target's decispec.toml and persist the registry with re-registration updating in place, a directory that is not a DecisionSpec project SHALL be rejected, and a first run SHALL persist the registry file even when seeding finds nothing"
+    layers: [unit]
+    scenarios: [tui_subcommand_parses, tui_register_adds_project_and_persists_registry, tui_register_rejects_a_non_project_dir, tui_load_or_seed_writes_registry_on_first_run]
+  }
+  scenario tui_subcommand_parses {
+    given: "the decispec tui invocation, with and without --register"
+    when: "the cli parses the subcommand line"
+    then: "register is None for the plain invocation and Some for --register"
+    # delegates: decispec (cli) tests::tui_subcommand_parses
+  }
+  scenario tui_register_adds_project_and_persists_registry {
+    given: "a DecisionSpec project and a registry path"
+    when: "register_project runs twice against the same project"
+    then: "the entry names the project and carries its canonical path, and the second registration updates in place with no duplicate"
+    # delegates: decispec (cli) tests::tui_register_adds_project_and_persists_registry
+  }
+  scenario tui_register_rejects_a_non_project_dir {
+    given: "a plain directory without decispec.toml"
+    when: "register_project runs"
+    then: "it returns an error instead of registering"
+    # delegates: decispec (cli) tests::tui_register_rejects_a_non_project_dir
+  }
+  scenario tui_load_or_seed_writes_registry_on_first_run {
+    given: "a registry path that does not exist yet"
+    when: "load_or_seed_registry runs with no seeds and then with seeds"
+    then: "the first run persists an empty registry file and the seeded run persists the seeds"
+    # delegates: decispec (cli) tests::tui_load_or_seed_writes_registry_on_first_run
+  }
+  requirement CMD-007-R2 (EARS) {
+    text: "WHEN the registry is seeded or a register path is expanded THEN only well-known project directories that exist on the machine SHALL be suggested, and a leading ~/ SHALL expand against $HOME while absolute and relative paths SHALL be left alone"
+    layers: [unit]
+    scenarios: [tui_registry_seeding_suggests_only_existing_dirs, tui_expand_home_leaves_absolute_and_plain_paths_alone]
+  }
+  scenario tui_registry_seeding_suggests_only_existing_dirs {
+    given: "a fake home containing Projects/FPF/tvgo but no verydian-app"
+    when: "default_seed_entries builds the first-run suggestions"
+    then: "only tvgo is suggested"
+    # delegates: decispec (cli) tests::tui_registry_seeding_suggests_only_existing_dirs
+  }
+  scenario tui_expand_home_leaves_absolute_and_plain_paths_alone {
+    given: "absolute, relative, and ~/ -prefixed paths"
+    when: "expand_home runs"
+    then: "the first two pass through untouched, ~/ expands against $HOME when set, and a missing $HOME never panics"
+    # delegates: decispec (cli) tests::tui_expand_home_leaves_absolute_and_plain_paths_alone
+  }
+  requirement CMD-007-R3 (EARS) {
+    text: "WHEN a registered project is loaded or a terminal key event arrives THEN a project with broken specs SHALL load as an error state naming the failing reference, a project carrying .decispec/report.json SHALL surface the gate verdict, crossterm events SHALL translate to key presses only with release events ignored, and editor keys SHALL map to their Input counterparts with control characters lowercased"
+    layers: [unit]
+    scenarios: [tui_load_project_keeps_broken_specs_as_error_state, tui_load_project_reads_gate_report_when_present, tui_translate_event_maps_presses_only, translate_event_maps_editor_keys_and_ctrl]
+  }
+  scenario tui_load_project_keeps_broken_specs_as_error_state {
+    given: "a project whose spec references a scenario that does not exist"
+    when: "load_tui_project runs"
+    then: "the project loads with no workspace and a load error naming the missing scenario"
+    # delegates: decispec (cli) tests::tui_load_project_keeps_broken_specs_as_error_state
+  }
+  scenario tui_load_project_reads_gate_report_when_present {
+    given: "a valid project whose .decispec/report.json records a pass"
+    when: "load_tui_project runs"
+    then: "the workspace loads and the gate snapshot carries the pass verdict"
+    # delegates: decispec (cli) tests::tui_load_project_reads_gate_report_when_present
+  }
+  scenario tui_translate_event_maps_presses_only {
+    given: "crossterm key events of kind press and release"
+    when: "translate_event runs"
+    then: "presses map to the Input vocabulary and releases map to nothing"
+    # delegates: decispec (cli) tests::tui_translate_event_maps_presses_only
+  }
+  scenario translate_event_maps_editor_keys_and_ctrl {
+    given: "crossterm events for backspace, delete, home, end, page up, page down, and control characters"
+    when: "translate_event runs"
+    then: "each maps to its editor Input counterpart, with control characters lowercased"
+    # delegates: decispec (cli) tests::translate_event_maps_editor_keys_and_ctrl
+  }
+}
+
+decision CMD-008 "In-TUI authoring writes reach projects only through the explicit save and the draft-PR flow" {
+  status: accepted
+  context: "F32 (2026-10-20, AGENT_TEAMS.md §6 guardrails): Ctrl+S writes the edited file into the project's specs/ and then re-checks the whole workspace, reporting consistency in the status bar; `p` opens a draft PR per the repo's own rules (tvgo: base main, human merge, agent never merges). The cli shells out to git and gh: save_spec_file writes then validates, pr_readiness gates on a git repo with uncommitted changes and a gh binary, the branch is spec/tui-<UTC timestamp>, and create_spec_pr commits exactly the spec file and pushes before gh is invoked."
+  consequences: "+ registered projects stay read-only except these two explicit, human-initiated actions, and every precheck failure lands in the status bar with a reason instead of a half-made PR. - the flow depends on git and gh binaries existing and only fails at the gh step against non-GitHub remotes, so the happy path is pinned against a local bare origin fixture rather than real GitHub; a save whose edit fails check still writes the file, by design — the error report is the guard, not a refusal."
+}
+
+spec CMD-008 {
+  requirement CMD-008-R1 (EARS) {
+    text: "WHEN a spec file is saved from the editor THEN the file SHALL be written into the project and a valid edit SHALL report the save with the workspace summary, while an edit that fails check SHALL still write but return a loud warning naming the check failure and its offending reference"
+    layers: [unit]
+    scenarios: [save_spec_file_writes_and_reports_workspace_health]
+  }
+  scenario save_spec_file_writes_and_reports_workspace_health {
+    given: "a project with a valid spec, edited first validly then into a broken reference"
+    when: "save_spec_file runs for each edit"
+    then: "the valid edit writes and reports the save with the decision count, and the broken edit still writes and warns that the workspace fails check naming the reference"
+    # delegates: decispec (cli) tests::save_spec_file_writes_and_reports_workspace_health
+  }
+  requirement CMD-008-R2 (EARS) {
+    text: "WHEN a draft PR is requested THEN a directory that is not a git repository SHALL be refused, a clean tree SHALL be refused as having nothing to PR, a dirty tree without gh SHALL be refused naming gh, a dirty tree with gh SHALL pass readiness, and the branch name SHALL be spec/tui- followed by the UTC timestamp"
+    layers: [unit]
+    scenarios: [pr_readiness_flags_non_git_clean_tree_and_missing_gh, pr_branch_name_is_utc_timestamped]
+  }
+  scenario pr_readiness_flags_non_git_clean_tree_and_missing_gh {
+    given: "a non-git directory, then a git fixture with a clean tree, then a dirty tree with and without gh"
+    when: "pr_readiness runs in each state"
+    then: "each refusal names its reason and only the dirty tree with gh passes"
+    # delegates: decispec (cli) tests::pr_readiness_flags_non_git_clean_tree_and_missing_gh
+  }
+  scenario pr_branch_name_is_utc_timestamped {
+    given: "two known instants in time"
+    when: "pr_branch_name formats each"
+    then: "the name is spec/tui- followed by the UTC date and time"
+    # delegates: decispec (cli) tests::pr_branch_name_is_utc_timestamped
+  }
+  requirement CMD-008-R3 (EARS) {
+    text: "WHEN the draft PR is created THEN a spec/tui- branch SHALL be created carrying a commit of exactly the spec file, that commit SHALL reach the origin, and the result SHALL nonetheless be an error naming gh when gh is missing or cannot work against the remote"
+    layers: [unit]
+    scenarios: [create_spec_pr_commits_pushes_then_reports_gh_failure]
+  }
+  scenario create_spec_pr_commits_pushes_then_reports_gh_failure {
+    given: "a git repo with a local bare origin, an edited spec, and a non-spec file"
+    when: "create_spec_pr runs with gh injected past readiness"
+    then: "the error names gh, the spec/tui- branch's single-spec commit is pushed to the origin, the non-spec file stays uncommitted, and no other file rides along"
+    # delegates: decispec (cli) tests::create_spec_pr_commits_pushes_then_reports_gh_failure
+  }
+  requirement CMD-008-R4 (EARS) {
+    text: "WHEN the only uncommitted changes are outside specs/ THEN the draft PR SHALL be refused naming specs, the worktree SHALL be restored to its previous branch with no spec/tui- branch left behind, and the uncommitted changes SHALL survive uncommitted"
+    layers: [unit]
+    scenarios: [create_spec_pr_refuses_changes_outside_specs_and_restores]
+  }
+  scenario create_spec_pr_refuses_changes_outside_specs_and_restores {
+    given: "a git repo whose only uncommitted change is a non-spec file"
+    when: "create_spec_pr runs"
+    then: "the error names specs, the previous branch is checked out with no spec/tui- branch remaining, and the change is still uncommitted"
+    # delegates: decispec (cli) tests::create_spec_pr_refuses_changes_outside_specs_and_restores
+  }
+  requirement CMD-008-R5 (EARS) {
+    text: "WHEN a spec file is saved THEN the write SHALL be confined to the project's specs/ tree — absolute paths, .. traversal, and non-specs first components SHALL be refused naming the refusal — and missing parent directories under specs/ SHALL be created so nested new files can be saved"
+    layers: [unit]
+    scenarios: [save_spec_file_creates_new_file_and_parent_dirs, save_spec_file_refuses_paths_outside_specs]
+  }
+  scenario save_spec_file_creates_new_file_and_parent_dirs {
+    given: "a save targeting specs/payments/010-new.spec where the payments directory does not exist"
+    when: "save_spec_file runs"
+    then: "the parent directories are created and the new file is written with the given text"
+    # delegates: decispec (cli) tests::save_spec_file_creates_new_file_and_parent_dirs
+  }
+  scenario save_spec_file_refuses_paths_outside_specs {
+    given: "saves targeting ../evil.spec, specs/../evil.spec, and an absolute path"
+    when: "save_spec_file runs for each"
+    then: "each is refused with an error naming the refusal and no file is written outside specs/"
+    # delegates: decispec (cli) tests::save_spec_file_refuses_paths_outside_specs
+  }
+}
+
+decision CMD-009 "Query expands from exact IDs to glob listings without changing the exact path" {
+  status: accepted
+  context: "The agent view (query) could only resolve one exact id at a time, so listing every CMD decision meant a shell loop; README's agentic loop showed query AUTH-001 and nothing more. Agents asked (2026-10-20, console-queue F40) for `'CMD-*'` patterns and a --status narrowing. The exact-ID resolution (decision, then requirement/scenario/invariant/policy id mapped to its parent decision, full subtree print) is characterization-tested and must not move — the pattern is an additive fast path selected by the presence of `*`."
+  consequences: "+ one query call lists a slice of the decision log compactly and --status answers 'what is still only proposed' without a pager. - two output shapes on one command (compact lines for patterns, full subtree for exact ids) means callers must know which they invoked, and a pattern with no match exits 1 exactly like an unknown id, so an over-specific glob is indistinguishable from a typo in the exit code."
+}
+
+spec CMD-009 {
+  requirement CMD-009-R1 (EARS) {
+    text: "WHEN query is given an id containing '*' THEN it SHALL list every matching decision one line each (id, status, title) sorted by id, WHILE an id without '*' SHALL keep the exact resolution and full-subtree output, and no match SHALL exit findings"
+    layers: [unit]
+    scenarios: [query_glob_match_follows_wildcard_semantics, query_pattern_selects_decisions_and_status_filters, query_pattern_with_no_match_exits_1]
+  }
+  requirement CMD-009-R2 (EARS) {
+    text: "WHEN --status is given THEN only decisions of that status SHALL be listed or printed, and an exact id whose status differs SHALL be treated as no match"
+    layers: [unit]
+    scenarios: [query_exact_id_and_star_pattern_both_exit_0]
+  }
+  scenario query_glob_match_follows_wildcard_semantics {
+    given: "patterns with stars in prefix, suffix and middle positions, a bare star, and a starless pattern"
+    when: "each is matched against decision ids"
+    then: "starless means exact equality and each star matches any run of characters anchored at both ends"
+    # delegates: decispec tests::query_glob_match_follows_wildcard_semantics
+  }
+  scenario query_pattern_selects_decisions_and_status_filters {
+    given: "a workspace with accepted CMD, proposed CMD and accepted TUI decisions"
+    when: "a CMD pattern is applied alone and together with --status"
+    then: "only the matching decisions are returned, sorted by id, and no match yields an empty list"
+    # delegates: decispec tests::query_pattern_selects_decisions_and_status_filters
+  }
+  scenario query_pattern_with_no_match_exits_1 {
+    given: "a project and a pattern that matches nothing"
+    when: "query runs"
+    then: "it prints a no-match message and exits findings, the same code as an unknown id"
+    # delegates: decispec tests::query_pattern_with_no_match_exits_1
+  }
+  scenario query_exact_id_and_star_pattern_both_exit_0 {
+    given: "a project with CMD-001 accepted and CMD-002 proposed"
+    when: "query runs with the exact id, with a star pattern, and with an exact id plus a mismatching --status"
+    then: "the exact id and the pattern both exit 0 while the mismatching status exits findings"
+    # delegates: decispec tests::query_exact_id_and_star_pattern_both_exit_0
+  }
+}
+
+decision CMD-010 "Partial generation writes only matching specs' artifacts and never sweeps" {
+  status: accepted
+  context: "F41 (2026-10-20 console queue): `gen` always rendered and swept the whole workspace, so touching one decision's scenarios rewrote every generated file and a filtered regeneration would have fed the stale sweep a partial render set — sweeping it would delete every artifact outside the filter. The prefix filter therefore owns two deliberate exclusions: workspace-scoped outputs (model/flow diagrams, shared conftest, fitness configs) are not decision-owned and are skipped, and the sweep is skipped entirely until a plain run reconciles."
+  consequences: "+ one command regenerates a slice without churning the rest of the tree, and an unmatched prefix is caught before anything is written. - a filtered run can leave stale artifacts from decisions that shrank since the last full gen, and --only never refreshes diagrams — plain 'decispec gen' remains the only reconciling command."
+}
+
+spec CMD-010 {
+  requirement CMD-010-R1 (EARS) {
+    text: "WHEN gen runs with --only prefixes THEN it SHALL write only the artifacts of specs whose id starts with a prefix, SHALL skip workspace-scoped outputs and the stale sweep, and SHALL leave every other generated file untouched"
+    layers: [unit]
+    scenarios: [gen_only_writes_matching_artifacts_and_skips_the_sweep, render_all_for_selects_only_matching_spec_artifacts]
+  }
+  requirement CMD-010-R2 (EARS) {
+    text: "WHEN no spec id matches any --only prefix THEN gen SHALL write nothing and exit findings, and WHEN --only is absent THEN rendering and sweeping SHALL be byte-identical to the unfiltered behavior"
+    layers: [unit]
+    scenarios: [gen_only_with_unmatched_prefix_exits_1_and_writes_nothing, render_all_for_with_no_prefixes_equals_render_all]
+  }
+  scenario gen_only_writes_matching_artifacts_and_skips_the_sweep {
+    given: "a project with AUTH and TUI specs and a stale generated diagram"
+    when: "gen runs with --only AUTH"
+    then: "only AUTH artifacts are written, workspace outputs are absent, and the stale diagram survives"
+    # delegates: decispec tests::gen_only_writes_matching_artifacts_and_skips_the_sweep
+  }
+  scenario render_all_for_selects_only_matching_spec_artifacts {
+    given: "a rendered workspace with two specs and diagrams, conftest and fitness outputs"
+    when: "render_all_for filters on one spec's prefix"
+    then: "only that spec's artifacts are returned and no workspace-scoped output appears"
+    # delegates: decispec-codegen tests::render_all_for_selects_only_matching_spec_artifacts
+  }
+  scenario gen_only_with_unmatched_prefix_exits_1_and_writes_nothing {
+    given: "a project and a prefix no spec matches"
+    when: "gen runs with --only"
+    then: "it exits findings and creates no generated tree"
+    # delegates: decispec tests::gen_only_with_unmatched_prefix_exits_1_and_writes_nothing
+  }
+  scenario render_all_for_with_no_prefixes_equals_render_all {
+    given: "a workspace"
+    when: "render_all_for is called with an empty prefix list"
+    then: "its output equals render_all exactly"
+    # delegates: decispec-codegen tests::render_all_for_with_no_prefixes_equals_render_all
+  }
+}

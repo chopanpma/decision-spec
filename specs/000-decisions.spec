@@ -75,7 +75,7 @@ spec ARCH-002 {
   scenario index_writes_decisions_md_and_exits_0 {
     given: "a valid spec workspace"
     when: "decispec index runs"
-    then: "docs/decisions.md is written and the exit code is 0"
+    then: ".decispec/docs/decisions.md is written and the exit code is 0"
     # delegates: decispec (cli) tests::index_writes_decisions_md_and_exits_0
   }
   scenario gate_exits_1_on_fail_verdict {
@@ -167,5 +167,26 @@ spec PARSE-001 {
     when: "the parser fails"
     then: "the diagnostic names the line where the string started"
     # delegates: decispec-parse tests::unterminated_string_reports_line
+  }
+}
+
+decision DOG-001 "Every workspace Rust test is pinned to exactly one spec scenario, and the gate itself enforces the bijection" {
+  status: accepted
+  context: "F29 and F33 each hand-audited the workspace's tests against this glue — the same mechanical comparison, re-invented twice and slow both times. The F33 review recommended making the audit code that runs inside the gate."
+  consequences: "+ a new test without a pin, a ghost pin, or a duplicate fails the gate loudly naming the offender; the audit cannot drift from reality. - the gate scenario enumerates the workspace with cargo test --list per package, adding seconds to each gate run."
+}
+
+spec DOG-001 {
+  requirement DOG-001-R1 (EARS) {
+    text: "WHEN the workspace's Rust tests change THEN every test SHALL be pinned to exactly one scenario and every pin SHALL name an existing test, and the gate SHALL fail naming any unpinned test, ghost pin, or duplicate"
+    layers: [unit]
+    scenarios: [every_rust_test_pinned_exactly_once]
+  }
+  scenario every_rust_test_pinned_exactly_once {
+    given: "the workspace's enumerated Rust tests and the delegate calls in tests/glue/__init__.py"
+    when: "the pin audit compares them"
+    then: "the bijection is exact, and any unpinned test, ghost pin, or duplicate is named"
+    # delegates: none — this scenario's glue performs the audit itself
+    # (tests/glue/pin_audit.py; pure core unit-tested in test_pin_audit.py)
   }
 }

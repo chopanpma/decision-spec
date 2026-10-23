@@ -190,3 +190,7 @@ delegation, probes, skip conventions, residue-free seeding).
   `decispec index` to refresh the repo-readable index.
 - Run `decispec check` before every commit — malformed specs are findings
   (exit 1), and CI should never see them.
+- `decispec check --strict` grades this guide's mechanical rules (EARS
+  requirement text, decision context/consequences with a minus, snake_case
+  scenario ids, every scenario claimed by a requirement): style findings
+  exit 1. Use plain `check` while drafting, `--strict` before review.

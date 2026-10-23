@@ -1,0 +1,17 @@
+[package]
+name = "decispec-tui"
+version = "0.1.0"
+edition = "2024"
+description = "DecisionSpec TUI: spec cockpit over registered projects (read-only except explicit save/PR)"
+
+[dependencies]
+decispec-ir = { path = "../ir" }
+decispec-codegen = { path = "../codegen" }
+decispec-parse = { path = "../parse" }
+decispec-gate = { path = "../gate" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ratatui = { workspace = true }
+
+[dev-dependencies]
+# (fixtures go through the same public parse dependency)
