@@ -12,10 +12,13 @@ decispec-extract = { path = "../extract" }
 decispec-gate = { path = "../gate" }
 decispec-mcp = { path = "../mcp" }
 decispec-store = { path = "../store" }
+decispec-tui = { path = "../tui" }
 clap = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 libc = { workspace = true }
+ratatui = { workspace = true, features = ["crossterm"] }
+crossterm = { workspace = true }
 
 [[bin]]
 name = "decispec"

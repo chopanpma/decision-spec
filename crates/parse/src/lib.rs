@@ -992,6 +992,92 @@ pub fn validate(ws: &Workspace) -> Vec<Diagnostic> {
     diags
 }
 
+/// Authoring-style rules from docs/SPEC_AUTHORING.md — the mechanical subset,
+/// surfaced by `decispec check --strict`. Grammar legality (refs, statuses,
+/// uniqueness) stays in `validate`; this grades prose shape, not truth.
+pub fn lint(ws: &Workspace) -> Vec<Diagnostic> {
+    let mut diags = Vec::new();
+
+    for d in &ws.decisions {
+        let has_context = d
+            .context
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|c| !c.is_empty());
+        if !has_context {
+            diags.push(Diagnostic::new(
+                &d.src,
+                format!("decision '{}' has no context", d.id),
+            ));
+        }
+        let cons = d.consequences.as_deref().map(str::trim).unwrap_or("");
+        if cons.is_empty() {
+            diags.push(Diagnostic::new(
+                &d.src,
+                format!("decision '{}' has no consequences", d.id),
+            ));
+        } else if !(cons.starts_with("- ") || cons.contains(" - ")) {
+            diags.push(Diagnostic::new(
+                &d.src,
+                format!(
+                    "decision '{}' lists no minus entry in its consequences (a decision with no cost is unfinished)",
+                    d.id
+                ),
+            ));
+        }
+    }
+
+    for sp in &ws.specs {
+        let mut listed: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for r in &sp.requirements {
+            listed.extend(r.scenarios.iter().map(String::as_str));
+            // Token-wise so words like SHIFT never count as the IF keyword.
+            let word = |w: &str| {
+                r.text
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|t| t == w)
+            };
+            let has_trigger = word("WHEN") || word("IF") || word("WHILE");
+            if !has_trigger || !word("SHALL") {
+                diags.push(Diagnostic::new(
+                    &r.src,
+                    format!(
+                        "requirement '{}' text is not EARS (needs a WHEN/IF/WHILE trigger and a SHALL response)",
+                        r.id
+                    ),
+                ));
+            }
+        }
+        for s in &sp.scenarios {
+            if !is_snake_case(&s.id) {
+                diags.push(Diagnostic::new(
+                    &s.src,
+                    format!("scenario '{}' is not snake_case", s.id),
+                ));
+            }
+            if !listed.contains(s.id.as_str()) {
+                diags.push(Diagnostic::new(
+                    &s.src,
+                    format!(
+                        "scenario '{}' is listed by no requirement (no gate row would cover it)",
+                        s.id
+                    ),
+                ));
+            }
+        }
+    }
+
+    diags
+}
+
+fn is_snake_case(id: &str) -> bool {
+    let mut chars = id.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !id.contains("__")
+        && !id.ends_with('_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1495,5 +1581,92 @@ spec AUTH-001 {
         let err = parse_file("specs/nested.spec", missing_else)
             .expect_err("nested alt without else must not parse");
         assert!(err.message.contains("else"), "{}", err.message);
+    }
+
+    // -- F26: style lint (parse::lint, check --strict) ------------------------
+
+    fn lint_of(src: &str) -> Vec<Diagnostic> {
+        let unit = parse_file("specs/lint.spec", src).expect("fixture must parse");
+        lint(&merge(vec![unit]))
+    }
+
+    const LINT_CLEAN: &str = r#"
+decision U-1 "Use SERIALIZABLE for the payment path" {
+  status: accepted
+  context: "Measured on 2026-09-03: concurrent writes double-allocated an instalment"
+  consequences: "+ concurrent payments cannot both land. - the whole transaction is retried"
+}
+
+spec U-1 {
+  requirement U-1-R1 (EARS) {
+    text: "WHEN two payments arrive together THEN the second SHALL abort with a retryable error"
+    layers: [unit]
+    scenarios: [second_payment_aborts]
+  }
+  scenario second_payment_aborts {
+    given: "an instalment with one pending payment"
+    when: "a second payment commits concurrently"
+    then: "the second raises and nothing is written twice"
+  }
+}
+"#;
+
+    #[test]
+    fn lint_flags_decisions_missing_context_or_consequences() {
+        let diags = lint_of("decision U-1 \"title\" {\n  status: accepted\n}\n");
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        assert!(diags[0].message.contains("no context"), "{diags:?}");
+        assert!(diags[1].message.contains("no consequences"), "{diags:?}");
+    }
+
+    #[test]
+    fn lint_flags_consequences_without_a_minus_entry() {
+        let src = "decision U-1 \"t\" {\n  status: accepted\n  context: \"ev\"\n  consequences: \"+ only gains, nothing costs\"\n}\n";
+        let diags = lint_of(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("minus"), "{diags:?}");
+    }
+
+    #[test]
+    fn lint_flags_requirement_text_missing_ears_keywords() {
+        let no_shall = LINT_CLEAN.replace(
+            "the second SHALL abort with a retryable error",
+            "the second aborts with a retryable error",
+        );
+        let diags = lint_of(&no_shall);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("not EARS"), "{diags:?}");
+
+        let no_trigger = LINT_CLEAN.replace(
+            "WHEN two payments arrive together THEN the second SHALL",
+            "The payment subsystem SHALL",
+        );
+        let diags = lint_of(&no_trigger);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("not EARS"), "{diags:?}");
+    }
+
+    #[test]
+    fn lint_flags_scenario_names_that_are_not_snake_case() {
+        let diags = lint_of(&LINT_CLEAN.replace("second_payment_aborts", "SecondPaymentAborts"));
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("not snake_case"), "{diags:?}");
+    }
+
+    #[test]
+    fn lint_flags_scenarios_never_listed_by_a_requirement() {
+        let src = LINT_CLEAN.replace(
+            "  scenario second_payment_aborts {",
+            "  scenario orphan_probe {\n    given: \"g\"\n    when: \"w\"\n    then: \"t\"\n  }\n  scenario second_payment_aborts {",
+        );
+        let diags = lint_of(&src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("listed by no requirement"), "{diags:?}");
+        assert!(diags[0].message.contains("orphan_probe"), "{diags:?}");
+    }
+
+    #[test]
+    fn lint_reports_nothing_on_a_conforming_workspace() {
+        assert!(lint_of(LINT_CLEAN).is_empty(), "{:?}", lint_of(LINT_CLEAN));
     }
 }
