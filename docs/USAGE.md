@@ -209,14 +209,17 @@ work queue), `gate_status`.
 
 ## 9. The spec cockpit (TUI)
 
-> First session? Walk through it in [docs/TUI.md](TUI.md) — register a
+> First session? Walk through it in [docs/TUI.md](TUI.md) — open it inside a
 > project, browse, edit, open a draft PR.
 
-`decispec tui` is a read-only terminal cockpit over **registered projects**
-— any directory with a `decispec.toml`. It exists so a spec fleet can be
-browsed from one place without generating files into any repository:
+`decispec tui` is a terminal cockpit for a **single project** by default: run
+it inside any project directory and it opens with exactly that project —
+the registry is not even read, and nothing is seeded. Outside a project (or
+with `--all`) it becomes the fleet browser over **registered projects** —
+any directory with a `decispec.toml`. It exists so specs can be
+browsed/edited from one place without generating files into any repository:
 
-- **specs** (default view): decision list with status colors per project —
+- **specs** (default view): decision list with status colors —
   accepted/proposed in full color, superseded dimmed, rejected red — a
   detail pane with context, consequences, requirements (layers + EARS text),
   scenarios, invariants, and infra policies, and a `/` keyword filter that
@@ -224,19 +227,20 @@ browsed from one place without generating files into any repository:
 - **artifacts** (`⇥`): what `decispec gen` **would** write, rendered in
   memory from the live workspace — diagrams, per-layer test skeletons, and
   the on-demand decision index — listed by path with a scrollable preview.
-  Nothing is written; registered projects stay clean of generated files.
+  Nothing is written; projects stay clean of generated files.
 - **dashboard** (`⇥`): the levels that are *active* on the project —
   decision-status counts (with accepted+proposed as "active"), requirements
   per layer, and the last gate verdict with its row counts, failures, and
   warnings (read from the project's `.decispec/report.json`).
 
 ```sh
-decispec tui                       # browse the registry
-decispec tui --register ~/work/app # add a project, then exit
+cd ~/work/app && decispec tui        # this project only (default)
+decispec tui --all                   # the registered fleet
+decispec tui --register ~/work/app   # add a project, then exit
 ```
 
-The registry lives at `~/.config/decispec/registry.toml`
-(`$XDG_CONFIG_HOME` honored); on first run it is seeded with well-known
+The registry (fleet mode only) lives at `~/.config/decispec/registry.toml`
+(`$XDG_CONFIG_HOME` honored); on first fleet run it is seeded with well-known
 projects that exist on the machine and written so it stays editable. A
 project whose specs fail to parse shows its `file:line` diagnostics as an
 error card instead of breaking the session.

@@ -1,19 +1,31 @@
 # How to use `decispec tui`
 
-`decispec tui` is a terminal UI over every DecisionSpec project you
-register. From one session you can browse a project's decisions and specs,
+`decispec tui` is a terminal UI over a DecisionSpec project. Run it inside a
+project and the session opens with exactly that project — no registry, no
+sidebar of foreign projects — so you can browse its decisions and specs,
 preview exactly what `decispec gen` would write (without writing it), see
 the last gate verdict, fix a spec with live `file:line` diagnostics, and
 push the fix as a draft PR. This guide walks through a first session; the
 reference description lives in [USAGE.md §9](USAGE.md#9-the-spec-cockpit-tui).
 
-The TUI is read-only over registered projects. It only ever writes in two
+The TUI is read-only over the project. It only ever writes in two
 places, both explicit: a spec file you save with `Ctrl+S`, and the
 git branch/draft PR you request with `p`.
 
-## 1. Register a project
+## 1. Start a session
 
-A project is any directory with a `decispec.toml`. Add one to the registry:
+```sh
+cd ~/work/payments
+decispec tui
+```
+
+The session opens on this project alone. (Outside any project, or with
+`--all`, the cockpit instead browses the registry, below.)
+
+## 2. The registry (fleet mode)
+
+A project is any directory with a `decispec.toml`. To browse several
+projects from one session, register them:
 
 ```sh
 decispec tui --register ~/work/payments
@@ -33,17 +45,16 @@ name = "payments"
 path = "~/work/payments"   # ~/ is expanded against $HOME
 ```
 
-On the very first run, if well-known projects (`~/Projects/FPF/tvgo`,
-`~/Projects/FPF/verydian-app`) exist on your machine they are seeded into
-the registry automatically, so the file is inspectable from the start.
-
-## 2. Start a session
+On the very first **fleet-mode** run, if well-known projects
+(`~/Projects/FPF/tvgo`, `~/Projects/FPF/verydian-app`) exist on your machine
+they are seeded into the registry automatically, so the file is inspectable
+from the start. Single-project sessions never touch the registry.
 
 ```sh
-decispec tui
+decispec tui --all   # fleet mode even inside a project
 ```
 
-You get a sidebar of registered projects (a red dot marks one that failed
+In fleet mode you get a sidebar of registered projects (a red dot marks one that failed
 to load — see §7) and the current project's view. A project whose specs
 don't parse shows its `file:line` diagnostics instead of crashing the
 session.
@@ -148,8 +159,10 @@ you get a plain message in the status bar and the session continues.
   to parse or its `decispec.toml` is missing. The error pane shows the
   `file:line` diagnostics; press `e` to fix the specs in place, then `r`
   to reload.
-- **Empty sidebar** — no registered projects; `decispec tui --register
-  <dir>` (the directory must contain a `decispec.toml`).
+- **Empty sidebar** — fleet mode (`--all` or a cwd outside any project) with
+  an empty registry; `decispec tui --register <dir>` adds a project (the
+  directory must contain a `decispec.toml`). Run inside a project, the
+  cockpit never shows a sidebar at all — it opens on the project directly.
 - **Dashboard has no gate section** — no `.decispec/report.json` yet; run
   `decispec gate` inside the project.
 - **`p` says "PR needs a loaded project"** — fix the load error first

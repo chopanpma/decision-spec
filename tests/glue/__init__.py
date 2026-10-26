@@ -8,12 +8,13 @@ A renamed or deleted Rust test fails loudly, never silently passes: the
 `--exact` filter matches nothing, cargo exits 0 with '0 passed', and the
 '1 passed' assertion below turns that into a glue failure.
 
-Every one of the workspace's 282 Rust tests is pinned to exactly one scenario
+Every one of the workspace's 285 Rust tests is pinned to exactly one scenario
 (F28 + F29 + F33 + F36 + F26 + F38; F33 added the decispec-tui pins with their full module
 paths, e.g. `app::tests::…`, because the tui tests live in per-module
 `tests` submodules; F46 pinned the GEN-008 diagram-move tests; F47 pinned the
 GATE-008/009 skip-honesty tests; F48 pinned the PORT-001/002 portable-spec
-tests). The bijection is enforced mechanically by the F34
+tests; F50 pinned the TUI-009 single-project startup tests). The bijection is
+enforced mechanically by the F34
 self-check — the `every_rust_test_pinned_exactly_once` scenario below fails
 the gate on any unpinned test, ghost pin, or duplicate (core in
 pin_audit.py, unit-tested in test_pin_audit.py), so the hand-audit ceremony
@@ -1192,6 +1193,20 @@ def init_from_refuses_to_clobber_existing_specs():
 
 def init_from_broken_specs_exit_2_naming_diagnostics():
     _delegate("decispec", "tests::init_from_broken_specs_exit_2_naming_diagnostics", target="--bins")
+
+
+# --- specs/060-tui.spec TUI-009 (F50): single-project startup ----------------
+
+def tui_opens_current_project_only_when_inside_one():
+    _delegate("decispec", "tests::tui_opens_current_project_only_when_inside_one", target="--bins")
+
+
+def tui_all_flag_keeps_registry_mode_inside_a_project():
+    _delegate("decispec", "tests::tui_all_flag_keeps_registry_mode_inside_a_project", target="--bins")
+
+
+def tui_falls_back_to_registry_outside_a_project():
+    _delegate("decispec", "tests::tui_falls_back_to_registry_outside_a_project", target="--bins")
 
 
 # --- specs/000-decisions.spec DOG-001 (F34): the pin self-check ------------

@@ -601,3 +601,40 @@ spec TUI-008 {
     # delegates: decispec-tui views::tests::specs_view_shows_filter_line_and_narrows_rows
   }
 }
+
+decision TUI-009 "The cockpit opens on the project you are in, not on the registry" {
+  status: accepted
+  context: "User request 2026-10-26: `decispec tui` used to open with every registered project (seeded on first run), so editing the spec of the project at hand meant landing in a foreign multi-project switcher — and first run silently wrote a registry the user never asked for. The cockpit is a spec-authoring tool; the common case is one project, entered from its own directory. F50: inside a project (cwd walking up to decispec.toml) the app opens with exactly that project, the registry file is not even read, and no seeding happens. The registry survives only as the fallback when cwd is outside any project, and `--all` forces it."
+  consequences: "+ zero ceremony in the common case: run `decispec tui` and you are editing this project's specs. - the multi-project dashboard becomes the exception (--all or a cwd outside projects), and a first run no longer pre-populates the registry, so `--all` on a fresh machine opens empty until `tui --register` adds something."
+}
+
+spec TUI-009 {
+  requirement TUI-009-R1 (EARS) {
+    text: "WHEN the cockpit starts with cwd inside a project and without --all THEN it SHALL open with exactly that project and SHALL NOT read, create, or seed the registry"
+    layers: [unit]
+    scenarios: [tui_opens_current_project_only_when_inside_one, tui_all_flag_keeps_registry_mode_inside_a_project]
+  }
+  requirement TUI-009-R2 (EARS) {
+    text: "WHEN the cockpit starts with cwd outside any project THEN it SHALL fall back to the registered projects (seeding on first run as before)"
+    layers: [unit]
+    scenarios: [tui_falls_back_to_registry_outside_a_project]
+  }
+  scenario tui_opens_current_project_only_when_inside_one {
+    given: "a project and a cwd nested inside it, plus an absent registry file"
+    when: "the startup project list is resolved without --all"
+    then: "the list holds exactly that project and the registry file was never created"
+    # delegates: decispec (cli) tests::tui_opens_current_project_only_when_inside_one
+  }
+  scenario tui_all_flag_keeps_registry_mode_inside_a_project {
+    given: "a project, a cwd inside it, and a registry naming another project"
+    when: "the startup list is resolved with --all"
+    then: "the registry projects are used, not the current one"
+    # delegates: decispec (cli) tests::tui_all_flag_keeps_registry_mode_inside_a_project
+  }
+  scenario tui_falls_back_to_registry_outside_a_project {
+    given: "a cwd in a bare directory and a registry naming one project"
+    when: "the startup list is resolved without --all"
+    then: "the registry projects are used"
+    # delegates: decispec (cli) tests::tui_falls_back_to_registry_outside_a_project
+  }
+}

@@ -149,12 +149,12 @@ worked example, and the anti-patterns: see
 | `decispec query <ID>` | Print the decision subtree (fields, model/flows, requirements/scenarios/invariants/policies with layers + artifact paths, last gate status from the store). Accepts decision, requirement, scenario, invariant and policy IDs. An id containing `*` (e.g. `CMD-*`) instead lists matching decisions one line each (id, status, title), sorted by id; `--status <s>` narrows either form and a non-match exits 1. |
 | `decispec extract [path] [--stdout] [--to <dir>]` | Bootstrap a draft spec from an already-started Python/JS/TS project: containers from top-level directories — or from the children of a single umbrella directory that holds the code (`src/`, your main package) — relationships from the import graph, decisions recovered from ADR markdown docs (`docs/adr/`, `docs/decisions/`, `adr/`, `decisions/`) as `decision` blocks with a `# Source:` comment each, plus a suggested `[stack.fitness.packages]` mapping. Writes `specs/extracted.spec` (refuses to overwrite it: exit 2 — delete it or pass `--stdout`), prints the draft with `--stdout`, or writes it **outside the analyzed repo** with `--to <dir>`: `<dir>/<project-dirname>.spec`, so one store directory can hold many projects' drafts. `--to` and `--stdout` are mutually exclusive (exit 2, nothing written), and an existing store file is never overwritten (exit 2, byte-identical). Warnings always go to stderr; the fitness TOML suggestion prints to stdout, or to stderr with `--stdout`. Recovery stops at structure: requirements are never inferred — the draft header says so. Exit 0 on success (warnings included), 2 when the tree has no source files or cannot be analyzed. |
 | `decispec index [--out <path>]` | Write a single GitHub-renderable markdown file embedding the mermaid architecture/flow diagrams plus decision/requirement/scenario tables — the whole decision picture. Default `.decispec/docs/decisions.md` (the gitignored generated area, like the diagrams — generated output stays out of the tracked tree; F49), `--out` overrides for when you want a tracked copy. On-demand only (never swept by `gen`). Needs a valid workspace: exit 2 on broken specs. |
-| `decispec tui [--register <DIR>]` | Spec cockpit (ratatui) over the projects registered in `~/.config/decispec/registry.toml`: formatted specs with decision-status levels, generated artifacts rendered **in memory** (never written into projects), a dashboard of active levels + last gate verdict — and, with `e`, a spec **editor** — existing files via a picker (`/`
+| `decispec tui [--register <DIR>] [--all]` | Spec cockpit (ratatui). By default it opens with **only the project you are in** (cwd walking up to `decispec.toml`) — the registry is not even read, so there is no seeding side effect; outside a project, or with `--all`, it opens the projects registered in `~/.config/decispec/registry.toml`. Views: formatted specs with decision-status levels, generated artifacts rendered **in memory** (never written into projects), a dashboard of active levels + last gate verdict — and, with `e`, a spec **editor** — existing files via a picker (`/`
 type-to-filters the list), or a **new
 file** (`n`, or straight to the name prompt when the project has none: a
 valid name opens a parseable PREFIX-001 skeleton) — with live `file:line`
 diagnostics (whole-workspace validation as you type) and explicit Ctrl+S
-save into the project; `p` opens a **draft PR** (git branch `spec/tui-<ts>` → `gh pr create --draft`, base `main`, never merged). `--register` adds a project and exits. Registered projects are read-only except those two explicit actions. Exit 0 clean quit, 2 setup failure — never 1. |
+save into the project; `p` opens a **draft PR** (git branch `spec/tui-<ts>` → `gh pr create --draft`, base `main`, never merged). `--register` adds a project and exits. Projects are read-only except those two explicit actions. Exit 0 clean quit, 2 setup failure — never 1. |
 
 All commands run from anywhere inside a project; `decispec.toml` is found by
 walking up from cwd.
@@ -363,9 +363,13 @@ hide a second problem behind it.
 
 ## The spec cockpit (TUI)
 
-`decispec tui` browses the **fleet**: every project registered in
+`decispec tui` is a spec cockpit. Run it **inside a project** and it opens
+with exactly that project — no registry, no project switcher, straight to
+this project's specs (TUI-009). Run it outside any project, or pass `--all`,
+and it browses the **fleet**: every project registered in
 `~/.config/decispec/registry.toml` (managed with `decispec tui --register
-<dir>`; first run seeds well-known projects that exist on the machine). Three
+<dir>`; first run in fleet mode seeds well-known projects that exist on the
+machine). Three
 views, cycled with `⇥`: formatted specs with decision-status levels
 (accepted/proposed bright, superseded dimmed, rejected red), a proof mark
 per decision from the last gate report (`✓ proven`, `◐ partial`,

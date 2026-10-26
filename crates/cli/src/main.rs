@@ -167,6 +167,11 @@ enum CommandKind {
         /// Register a project directory in the TUI registry, then exit
         #[arg(long, value_name = "DIR")]
         register: Option<PathBuf>,
+        /// Open the cockpit with all registered projects instead of only the
+        /// project you are in (the default; outside a project the registry is
+        /// used anyway)
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -175,7 +180,13 @@ enum CommandKind {
 // ---------------------------------------------------------------------------
 
 fn find_project_root() -> CliResult<PathBuf> {
-    let mut dir = std::env::current_dir()?;
+    find_project_root_from(&std::env::current_dir()?)
+}
+
+/// Walk up from `start` looking for decispec.toml. Outside any project the
+/// error message still says "cwd" — the TUI fallback only cares that it errs.
+fn find_project_root_from(start: &Path) -> CliResult<PathBuf> {
+    let mut dir = start.to_path_buf();
     loop {
         if dir.join("decispec.toml").is_file() {
             return Ok(dir);
@@ -2113,6 +2124,16 @@ fn register_project(
     reg_path: &Path,
     dir: &Path,
 ) -> CliResult<decispec_tui::registry::ProjectEntry> {
+    let entry = entry_for_root(dir)?;
+    let mut reg = read_registry(reg_path)?;
+    reg.upsert(entry.clone());
+    save_registry(reg_path, &reg)?;
+    Ok(entry)
+}
+
+/// The registry entry a project directory maps to (canonical path, name from
+/// `[project].name`) — `register_project` minus the registry write.
+fn entry_for_root(dir: &Path) -> CliResult<decispec_tui::registry::ProjectEntry> {
     let root = dir
         .canonicalize()
         .map_err(|e| CliError::Msg(format!("{}: {e}", dir.display())))?;
@@ -2123,14 +2144,28 @@ fn register_project(
         )));
     }
     let cfg = load_config(&root)?;
-    let entry = decispec_tui::registry::ProjectEntry {
+    Ok(decispec_tui::registry::ProjectEntry {
         name: cfg.project,
         path: root.to_string_lossy().to_string(),
-    };
-    let mut reg = read_registry(reg_path)?;
-    reg.upsert(entry.clone());
-    save_registry(reg_path, &reg)?;
-    Ok(entry)
+    })
+}
+
+/// Which projects the cockpit opens with (TUI-009): by default exactly the
+/// project containing `cwd` — the registry is not even read, so single-project
+/// startup has no seeding side effect. `--all`, or a cwd outside any project,
+/// falls back to the registry (seeding on first run as before).
+fn tui_project_entries(
+    cwd: &Path,
+    all: bool,
+    reg_path: &Path,
+    seeds: Vec<decispec_tui::registry::ProjectEntry>,
+) -> CliResult<Vec<decispec_tui::registry::ProjectEntry>> {
+    if !all
+        && let Ok(root) = find_project_root_from(cwd)
+    {
+        return Ok(vec![entry_for_root(&root)?]);
+    }
+    Ok(load_or_seed_registry(reg_path, seeds)?.projects)
 }
 
 /// `~/...` paths in the registry expand against `$HOME`.
@@ -2198,7 +2233,7 @@ fn read_spec_sources(root: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-fn cmd_tui(register: Option<PathBuf>) -> CliResult<ExitCode> {
+fn cmd_tui(register: Option<PathBuf>, all: bool) -> CliResult<ExitCode> {
     let reg_path = registry_path()?;
     if let Some(dir) = register {
         let entry = register_project(&reg_path, &dir)?;
@@ -2206,8 +2241,9 @@ fn cmd_tui(register: Option<PathBuf>) -> CliResult<ExitCode> {
         println!("registry: {}", reg_path.display());
         return Ok(ExitCode::from(EXIT_OK));
     }
-    let registry = load_or_seed_registry(&reg_path, seeds_for_this_machine())?;
-    let projects: Vec<ProjectData> = registry.projects.iter().map(load_tui_project).collect();
+    let cwd = std::env::current_dir()?;
+    let entries = tui_project_entries(&cwd, all, &reg_path, seeds_for_this_machine())?;
+    let projects: Vec<ProjectData> = entries.iter().map(load_tui_project).collect();
     let mut app = App::new(projects);
     run_tui_loop(&mut app, &reg_path)?;
     Ok(ExitCode::from(EXIT_OK))
@@ -2602,7 +2638,7 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
             let root = find_project_root()?;
             cmd_index(&root, out)
         }
-        CommandKind::Tui { register } => cmd_tui(register),
+        CommandKind::Tui { register, all } => cmd_tui(register, all),
     }
 }
 
@@ -4222,6 +4258,56 @@ spec SKIP-001 {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    // -- F50: single-project startup (TUI-009) ---------------------------------
+
+    #[test]
+    fn tui_opens_current_project_only_when_inside_one() {
+        let root = temp_project(); // decispec.toml with name = "t"
+        let nested = root.join("src/deep");
+        std::fs::create_dir_all(&nested).unwrap();
+        let reg = root.join("config/registry.toml"); // absent
+
+        let entries = tui_project_entries(&nested, false, &reg, Vec::new()).unwrap();
+        assert_eq!(entries.len(), 1, "exactly the current project");
+        let canonical = root.canonicalize().unwrap();
+        assert_eq!(entries[0].path, canonical.to_string_lossy());
+        assert_eq!(entries[0].name, "t");
+        assert!(
+            !reg.exists(),
+            "single-project mode must not read, create, or seed the registry"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn tui_all_flag_keeps_registry_mode_inside_a_project() {
+        let root = temp_project();
+        let reg = root.join("config/registry.toml");
+        std::fs::create_dir_all(reg.parent().unwrap()).unwrap();
+        std::fs::write(&reg, "[[project]]\nname = \"other\"\npath = \"/tmp/other\"\n").unwrap();
+
+        let entries = tui_project_entries(&root, true, &reg, Vec::new()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "other", "--all forces registry mode");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn tui_falls_back_to_registry_outside_a_project() {
+        let bare = bare_dir("tui-fallback");
+        let reg = bare.join("registry.toml");
+        std::fs::write(
+            &reg,
+            "[[project]]\nname = \"stored\"\npath = \"/tmp/wherever\"\n",
+        )
+        .unwrap();
+
+        let entries = tui_project_entries(&bare, false, &reg, Vec::new()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "stored");
+        std::fs::remove_dir_all(&bare).unwrap();
+    }
+
     #[test]
     fn tui_registry_seeding_suggests_only_existing_dirs() {
         let home = temp_project(); // reused as a fake $HOME
@@ -4335,13 +4421,25 @@ spec SKIP-001 {
         let cli = Cli::try_parse_from(["decispec", "tui"]).unwrap();
         assert!(matches!(
             cli.command,
-            CommandKind::Tui { register: None }
+            CommandKind::Tui {
+                register: None,
+                all: false
+            }
         ));
         let cli = Cli::try_parse_from(["decispec", "tui", "--register", "/tmp/x"]).unwrap();
         assert!(matches!(
             cli.command,
             CommandKind::Tui {
-                register: Some(_)
+                register: Some(_),
+                all: false
+            }
+        ));
+        let cli = Cli::try_parse_from(["decispec", "tui", "--all"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            CommandKind::Tui {
+                register: None,
+                all: true
             }
         ));
     }
