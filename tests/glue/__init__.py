@@ -1041,8 +1041,8 @@ def a_decision_with_no_rows_is_unproven():
     _delegate("decispec-gate", "coverage::tests::a_decision_with_no_rows_is_unproven")
 
 
-def superseded_and_rejected_decisions_are_excluded():
-    _delegate("decispec-gate", "coverage::tests::superseded_and_rejected_decisions_are_excluded")
+def only_accepted_decisions_count_in_the_headline():
+    _delegate("decispec-gate", "coverage::tests::only_accepted_decisions_count_in_the_headline")
 
 
 def headline_counts_decisions_not_scenarios():
@@ -1238,3 +1238,26 @@ def tui_headline_uses_the_nearest_percent():
 
 def percent_nearest_rounds_half_up_and_keeps_the_floored_percent():
     _delegate("decispec-gate", "coverage::tests::percent_nearest_rounds_half_up_and_keeps_the_floored_percent")
+
+
+# --- specs/070-proof.spec PROOF-006: a proposed decision is not counted -------
+
+
+def proposed_decisions_are_counted_apart():
+    _delegate("decispec-gate", "coverage::tests::proposed_decisions_are_counted_apart")
+
+
+def coverage_lists_proposed_apart():
+    _delegate("decispec", "tests::coverage_lists_proposed_apart", target="--bins")
+
+
+def coverage_without_proposed_decisions_prints_no_proposed_line():
+    _delegate("decispec", "tests::coverage_without_proposed_decisions_prints_no_proposed_line", target="--bins")
+
+
+def tui_headline_notes_the_proposed_count():
+    _delegate("decispec-tui", "views::tests::tui_headline_notes_the_proposed_count")
+
+
+def tui_spec_list_marks_a_proposed_decision_apart():
+    _delegate("decispec-tui", "views::tests::tui_spec_list_marks_a_proposed_decision_apart")
