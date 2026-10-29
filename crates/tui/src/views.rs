@@ -38,16 +38,25 @@ fn proof_mark_span(state: ProofState) -> Span<'static> {
     )
 }
 
-/// The mark column for one spec-list row. Gatable decisions join to the
-/// report's rollup by id; a gatable decision absent from the report has no
-/// passing rows on record, so it is honestly unproven. Superseded/rejected
-/// decisions are outside coverage and get a dim placeholder for alignment.
+/// The mark column for one spec-list row. Accepted decisions join to the
+/// report's rollup by id; an accepted decision absent from the report has no
+/// passing rows on record, so it is honestly unproven. A proposed decision is
+/// not counted, so it keeps its state as plain dim text with no proof mark.
+/// Superseded/rejected decisions are outside coverage and get a dim
+/// placeholder for alignment.
 fn proof_span(coverage: Option<&Coverage>, id: &str, status: Status) -> Span<'static> {
+    if status == Status::Proposed {
+        let state = coverage
+            .and_then(|cov| cov.proposed_decisions.iter().find(|d| d.id == id))
+            .map_or(ProofState::Unproven, |d| d.state);
+        return Span::styled(
+            format!("· {} ", state.as_str()),
+            Style::default().fg(Color::DarkGray),
+        );
+    }
     match coverage.and_then(|cov| cov.decisions.iter().find(|d| d.id == id)) {
         Some(d) => proof_mark_span(d.state),
-        None if matches!(status, Status::Accepted | Status::Proposed) => {
-            proof_mark_span(ProofState::Unproven)
-        }
+        None if status == Status::Accepted => proof_mark_span(ProofState::Unproven),
         None => Span::styled("— ", Style::default().fg(Color::DarkGray)),
     }
 }
@@ -74,9 +83,15 @@ fn headline_style(cov: &Coverage) -> Style {
     }
 }
 
-/// `N/M decisions proven (P%)`, with P rounded to the nearest percent.
+/// `N/M decisions proven (P%)`, with P rounded to the nearest percent, over
+/// accepted decisions. `· +K proposed` follows when proposed decisions exist.
 fn headline_text(cov: &Coverage) -> String {
-    format!("{}/{} decisions proven ({}%)", cov.proven, cov.gatable, cov.percent_nearest())
+    let base = format!("{}/{} decisions proven ({}%)", cov.proven, cov.gatable, cov.percent_nearest());
+    if cov.proposed > 0 {
+        format!("{base} · +{} proposed", cov.proposed)
+    } else {
+        base
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -908,7 +923,7 @@ decision AUTH-001 "Auth decision" {
 }
 
 decision PAY-001 "Payments decision" {
-  status: proposed
+  status: accepted
   context: "needs payments"
   consequences: "+ money; - complexity"
 }
@@ -986,7 +1001,7 @@ spec AUTH-001 {
                 ),
                 decision_snapshot(
                     "PAY-001",
-                    Status::Proposed,
+                    Status::Accepted,
                     &[Some(RowOutcome::Pass), Some(RowOutcome::Fail)],
                 ),
                 decision_snapshot("AUD-001", Status::Accepted, &[Some(RowOutcome::Skipped)]),
@@ -1053,8 +1068,39 @@ spec AUTH-001 {
 
     #[test]
     fn tui_headline_uses_the_nearest_percent() {
-        let cov = Coverage { proven: 54, gatable: 74, percent: 72, decisions: vec![] };
+        let cov = Coverage { proven: 54, gatable: 74, percent: 72, decisions: vec![], ..Default::default() };
         assert_eq!(headline_text(&cov), "54/74 decisions proven (73%)");
+    }
+
+    #[test]
+    fn tui_headline_notes_the_proposed_count() {
+        let cov = Coverage {
+            proven: 54,
+            gatable: 68,
+            percent: 79,
+            proposed: 6,
+            ..Default::default()
+        };
+        assert_eq!(headline_text(&cov), "54/68 decisions proven (79%) · +6 proposed");
+        let none = Coverage { proven: 1, gatable: 2, percent: 50, ..Default::default() };
+        assert_eq!(headline_text(&none), "1/2 decisions proven (50%)");
+    }
+
+    #[test]
+    fn tui_spec_list_marks_a_proposed_decision_apart() {
+        let cov = Coverage {
+            proposed: 1,
+            proposed_decisions: vec![decispec_gate::coverage::DecisionCoverage {
+                id: "D-2".to_string(),
+                state: ProofState::Partial,
+            }],
+            ..Default::default()
+        };
+        let span = proof_span(Some(&cov), "D-2", Status::Proposed);
+        assert_eq!(span.content, "· partial ", "the state stays visible, without a counted mark");
+        assert_eq!(span.style.fg, Some(Color::DarkGray));
+        let absent = proof_span(Some(&cov), "D-9", Status::Proposed);
+        assert_eq!(absent.content, "· unproven ");
     }
 
     #[test]

@@ -1448,7 +1448,11 @@ fn print_matrix(report: &decispec_gate::GateReport, filter: &Filter) {
         c.skipped,
         c.no_artifacts
     );
-    println!("{}", coverage_line(&report.coverage()));
+    let coverage = report.coverage();
+    println!("{}", coverage_line(&coverage));
+    if let Some(line) = proposed_line(&coverage) {
+        println!("{line}");
+    }
 }
 
 fn cmd_gate(
@@ -1620,6 +1624,15 @@ fn coverage_line(cov: &decispec_gate::coverage::Coverage) -> String {
     )
 }
 
+/// The line that follows the headline when proposed decisions exist.
+fn proposed_line(cov: &decispec_gate::coverage::Coverage) -> Option<String> {
+    match cov.proposed {
+        0 => None,
+        1 => Some("proposed: 1 decision, not counted".to_string()),
+        n => Some(format!("proposed: {n} decisions, not counted")),
+    }
+}
+
 /// Full console rendering: header naming the run the numbers reflect, one
 /// marked line per gatable decision, then the headline line.
 fn render_coverage(
@@ -1635,6 +1648,14 @@ fn render_coverage(
     }
     out.push_str(&coverage_line(cov));
     out.push('\n');
+    if let Some(line) = proposed_line(cov) {
+        out.push_str(&line);
+        out.push('\n');
+        // No proof mark: a mark would read as counted, and scripts count the marks.
+        for d in &cov.proposed_decisions {
+            out.push_str(&format!("  {} {}\n", d.id, d.state.as_str()));
+        }
+    }
     out
 }
 
@@ -3826,7 +3847,7 @@ spec SKIP-001 {
            {"decision": "D-1", "requirement": "D-1-R1", "item": "a", "kind": "scenario", "layer": "unit", "artifacts": [], "result": "pass", "detail": ""},
            {"decision": "D-1", "requirement": "D-1-R1", "item": "b", "kind": "scenario", "layer": "unit", "artifacts": [], "result": "pass", "detail": ""}
          ]},
-        {"id": "D-2", "status": "proposed", "outcome": "fail",
+        {"id": "D-2", "status": "accepted", "outcome": "fail",
          "rows": [
            {"decision": "D-2", "requirement": "D-2-R1", "item": "c", "kind": "scenario", "layer": "unit", "artifacts": [], "result": "pass", "detail": ""},
            {"decision": "D-2", "requirement": "D-2-R1", "item": "d", "kind": "scenario", "layer": "unit", "artifacts": [], "result": "fail", "detail": ""}
@@ -3859,6 +3880,44 @@ spec SKIP-001 {
         );
         // PROOF-001-R1: the output names the run it reflects.
         assert!(out.contains("from gate run 2026-10-20 12:00:00 UTC"), "{out}");
+    }
+
+    #[test]
+    fn coverage_lists_proposed_apart() {
+        // D-5 is proposed and fully passing; D-6 is proposed with no rows.
+        let report = COVERAGE_REPORT.replace(
+            r#"{"id": "D-4", "status": "superseded", "outcome": "excluded-superseded", "rows": []}"#,
+            r#"{"id": "D-4", "status": "superseded", "outcome": "excluded-superseded", "rows": []},
+        {"id": "D-5", "status": "proposed", "outcome": "pass",
+         "rows": [
+           {"decision": "D-5", "requirement": "D-5-R1", "item": "f", "kind": "scenario", "layer": "unit", "artifacts": [], "result": "pass", "detail": ""}
+         ]},
+        {"id": "D-6", "status": "proposed", "outcome": "fail", "rows": []}"#,
+        );
+        let (project, cov) = coverage_from_report(&report).unwrap();
+        let out = render_coverage(&project, &cov, "2026-10-20 12:00:00 UTC");
+
+        // The headline is unchanged: proposed decisions are in neither side of it.
+        assert!(out.contains("coverage: 1/3 decisions proven (33%)"), "{out}");
+        assert_eq!(
+            proposed_line(&cov).as_deref(),
+            Some("proposed: 2 decisions, not counted")
+        );
+        assert!(out.contains("proposed: 2 decisions, not counted"), "{out}");
+        // Listed apart with their own state, and without the marks the counted ones carry.
+        assert!(out.contains("  D-5 proven"), "{out}");
+        assert!(out.contains("  D-6 unproven"), "{out}");
+        for mark in ["✓ D-5", "○ D-6", "◐ D-5"] {
+            assert!(!out.contains(mark), "a proposed decision must not carry a counted mark: {out}");
+        }
+    }
+
+    #[test]
+    fn coverage_without_proposed_decisions_prints_no_proposed_line() {
+        let (_, cov) = coverage_from_report(COVERAGE_REPORT).unwrap();
+        assert_eq!(proposed_line(&cov), None);
+        let out = render_coverage("demo", &cov, "2026-10-20 12:00:00 UTC");
+        assert!(!out.contains("proposed"), "{out}");
     }
 
     #[test]

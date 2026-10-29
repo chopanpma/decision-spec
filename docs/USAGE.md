@@ -183,8 +183,9 @@ coverage: 1/3 decisions proven (33%)
 
 A decision is **proven** only when every gatable row mapped to it passed;
 **partial** when at least one row passed and at least one did not (a `SKIPPED`
-row is never proof); superseded and rejected decisions are excluded from the
-headline. The gate's own summary prints the same line, and the TUI shows the
+row is never proof); only accepted decisions count in the headline. A
+`proposed` decision is not approved: it is listed apart under a `proposed: K
+decisions, not counted` line, and superseded and rejected decisions are excluded. The gate's own summary prints the same line, and the TUI shows the
 per-decision marks and the headline on the dashboard. The `from gate run …`
 stamp matters: the numbers reflect that run, so re-run `decispec gate` after
 editing specs. In CI, `decispec coverage --min 80` exits 1 while the headline

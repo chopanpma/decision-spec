@@ -50,12 +50,16 @@ pub struct DecisionCoverage {
 pub struct Coverage {
     /// Decisions with every row passed.
     pub proven: usize,
-    /// Accepted + proposed decisions — the denominator.
+    /// Accepted decisions — the denominator.
     pub gatable: usize,
     /// `proven * 100 / gatable`, floored; 0 when `gatable` is 0.
     pub percent: usize,
     /// Gatable decisions in report order, each with its computed state.
     pub decisions: Vec<DecisionCoverage>,
+    /// Proposed decisions: not approved, so outside every count above.
+    pub proposed: usize,
+    /// The proposed decisions in report order, each with its computed state.
+    pub proposed_decisions: Vec<DecisionCoverage>,
 }
 
 impl Coverage {
@@ -92,15 +96,16 @@ impl<'a> DecisionEvidence<'a> {
 }
 
 /// Roll report evidence up into per-decision proof states + the headline.
-/// Superseded and rejected decisions are excluded from every count; a SKIPPED
-/// (or failed/uncovered/no-artifacts) row is never proof.
+/// Only accepted decisions count: a proposed decision is not approved, so it is
+/// listed apart with its own proof state and stays out of the numerator and the
+/// denominator. Superseded and rejected decisions are excluded from every list.
+/// A SKIPPED (or failed/uncovered/no-artifacts) row is never proof.
 pub fn rollup(evidence: &[DecisionEvidence]) -> Coverage {
     let mut cov = Coverage::default();
     for e in evidence {
         if !matches!(e.status, Status::Accepted | Status::Proposed) {
             continue;
         }
-        cov.gatable += 1;
         let state = if e.rows_total > 0 && e.rows_passed == e.rows_total {
             ProofState::Proven
         } else if e.rows_passed > 0 {
@@ -108,13 +113,20 @@ pub fn rollup(evidence: &[DecisionEvidence]) -> Coverage {
         } else {
             ProofState::Unproven
         };
+        let entry = DecisionCoverage {
+            id: e.id.to_string(),
+            state,
+        };
+        if e.status == Status::Proposed {
+            cov.proposed += 1;
+            cov.proposed_decisions.push(entry);
+            continue;
+        }
+        cov.gatable += 1;
         if state == ProofState::Proven {
             cov.proven += 1;
         }
-        cov.decisions.push(DecisionCoverage {
-            id: e.id.to_string(),
-            state,
-        });
+        cov.decisions.push(entry);
     }
     cov.percent = cov.proven.checked_mul(100).and_then(|x| x.checked_div(cov.gatable)).unwrap_or(0);
     cov
@@ -146,6 +158,7 @@ mod tests {
             gatable,
             percent: proven.checked_mul(100).and_then(|x| x.checked_div(gatable)).unwrap_or(0),
             decisions: vec![],
+            ..Default::default()
         }
     }
 
@@ -245,26 +258,46 @@ mod tests {
 
     #[test]
     fn a_decision_with_no_rows_is_unproven() {
-        let cov = rollup(&[ev("D-1", Status::Proposed, &[])]);
+        let cov = rollup(&[ev("D-1", Status::Accepted, &[])]);
         assert_eq!(cov.decisions[0].state, ProofState::Unproven);
-        assert_eq!(cov.gatable, 1, "proposed decisions count in the denominator");
+        assert_eq!(cov.gatable, 1);
         assert_eq!(cov.percent, 0);
     }
 
     #[test]
-    fn superseded_and_rejected_decisions_are_excluded() {
+    fn only_accepted_decisions_count_in_the_headline() {
         let cov = rollup(&[
             ev("D-1", Status::Accepted, &[RowResult::Pass]),
             ev("D-2", Status::Proposed, &[RowResult::Pass]),
             ev("D-3", Status::Superseded, &[RowResult::Pass]),
             ev("D-4", Status::Rejected, &[]),
         ]);
-        assert_eq!(cov.gatable, 2, "only accepted + proposed count");
-        assert_eq!(cov.proven, 2);
+        assert_eq!(cov.gatable, 1, "only accepted counts in the denominator");
+        assert_eq!(cov.proven, 1, "a proposed decision is never counted as proven");
         assert_eq!(
             cov.decisions.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
-            vec!["D-1", "D-2"],
-            "excluded decisions must not appear in the per-decision list either"
+            vec!["D-1"],
+            "proposed, superseded and rejected decisions are not in the counted list"
+        );
+    }
+
+    #[test]
+    fn proposed_decisions_are_counted_apart() {
+        let cov = rollup(&[
+            ev("D-1", Status::Accepted, &[RowResult::Fail]),
+            ev("D-2", Status::Proposed, &[RowResult::Pass]),
+            ev("D-3", Status::Proposed, &[RowResult::Pass, RowResult::Skipped]),
+            ev("D-4", Status::Rejected, &[]),
+        ]);
+        assert_eq!((cov.proven, cov.gatable, cov.percent), (0, 1, 0));
+        assert_eq!(cov.proposed, 2);
+        assert_eq!(
+            cov.proposed_decisions
+                .iter()
+                .map(|d| (d.id.as_str(), d.state))
+                .collect::<Vec<_>>(),
+            vec![("D-2", ProofState::Proven), ("D-3", ProofState::Partial)],
+            "proposed decisions keep their own proof state, listed apart"
         );
     }
 
@@ -313,11 +346,15 @@ mod tests {
                 .iter()
                 .map(|d| (d.id.as_str(), d.state))
                 .collect::<Vec<_>>(),
-            vec![
-                ("D-1", ProofState::Proven),
-                ("D-2", ProofState::Unproven),
-            ]
+            vec![("D-1", ProofState::Proven)]
         );
-        assert_eq!((cov.proven, cov.gatable, cov.percent), (1, 2, 50));
+        assert_eq!(
+            cov.proposed_decisions
+                .iter()
+                .map(|d| (d.id.as_str(), d.state))
+                .collect::<Vec<_>>(),
+            vec![("D-2", ProofState::Unproven)]
+        );
+        assert_eq!((cov.proven, cov.gatable, cov.percent), (1, 1, 100));
     }
 }

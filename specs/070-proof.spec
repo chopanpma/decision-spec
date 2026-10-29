@@ -51,9 +51,9 @@ spec PROOF-002 {
     scenarios: [every_passing_row_marks_the_decision_proven, one_failing_row_marks_the_decision_partial, a_skipped_row_is_not_proof, a_decision_with_no_rows_is_unproven]
   }
   requirement PROOF-002-R2 (EARS) {
-    text: "WHEN the headline percentage is computed THEN it SHALL count proven gatable decisions over all gatable decisions, excluding superseded and rejected ones, and SHALL not weight by scenario or row count"
+    text: "WHEN the headline percentage is computed THEN it SHALL count proven accepted decisions over all accepted decisions, excluding proposed, superseded and rejected ones, and SHALL not weight by scenario or row count"
     layers: [unit]
-    scenarios: [superseded_and_rejected_decisions_are_excluded, headline_counts_decisions_not_scenarios]
+    scenarios: [only_accepted_decisions_count_in_the_headline, headline_counts_decisions_not_scenarios]
   }
   scenario every_passing_row_marks_the_decision_proven {
     given: "a decision whose mapped matrix rows all passed"
@@ -79,11 +79,11 @@ spec PROOF-002 {
     then: "the decision is unproven rather than vacuously proven"
     # delegates: decispec-gate coverage::tests::a_decision_with_no_rows_is_unproven
   }
-  scenario superseded_and_rejected_decisions_are_excluded {
+  scenario only_accepted_decisions_count_in_the_headline {
     given: "a workspace mixing accepted, proposed, superseded, and rejected decisions"
     when: "the headline percentage is computed"
-    then: "only accepted and proposed decisions appear in the numerator and the denominator"
-    # delegates: decispec-gate coverage::tests::superseded_and_rejected_decisions_are_excluded
+    then: "only accepted decisions appear in the numerator and the denominator, so a proposed decision is never counted as proven"
+    # delegates: decispec-gate coverage::tests::only_accepted_decisions_count_in_the_headline
   }
   scenario headline_counts_decisions_not_scenarios {
     given: "a workspace where one decision has one scenario and another has five"
@@ -182,5 +182,59 @@ spec PROOF-005 {
     when: "the summary renders"
     then: "the verdict line is followed by the headline coverage line naming proven, gatable, and percent"
     # delegates: decispec (cli) tests::gate_summary_prints_the_proven_percentage
+  }
+}
+
+decision PROOF-006 "A proposed decision is not counted as proven and is listed apart" {
+  status: accepted
+  context: "User request 2026-10-29: a decision that is only proposed has not been approved, so counting it in the proven percentage overstates what is approved. Until now the rollup counted accepted and proposed decisions in both the numerator and the denominator, and a project that specs a feature before building it saw those proposals pull the headline down or up. The status already exists on every decision (accepted, proposed, rejected, superseded), so no new field is needed."
+  consequences: "+ the headline is the share of approved decisions that are proven, and a proposal cannot raise or lower it. + proposals stay visible: their count, their ids and their own proof state are shown apart. - the percentage of an existing project changes the day it upgrades, because its proposed decisions leave the denominator. - a consumer that read the proposed decisions as counted must read the new apart-list."
+}
+
+spec PROOF-006 {
+  requirement PROOF-006-R1 (EARS) {
+    text: "WHEN the rollup is computed THEN a proposed decision SHALL be excluded from the numerator and the denominator, SHALL be counted apart, and SHALL be listed apart with its own proof state"
+    layers: [unit]
+    scenarios: [proposed_decisions_are_counted_apart]
+  }
+  requirement PROOF-006-R2 (EARS) {
+    text: "WHEN coverage is printed and at least one decision is proposed THEN the headline line SHALL keep its shape over accepted decisions, and a line `proposed: K decisions, not counted` SHALL follow it with each proposed decision listed without a proof mark, and WHEN none is proposed THEN no proposed line SHALL appear"
+    layers: [unit]
+    scenarios: [coverage_lists_proposed_apart, coverage_without_proposed_decisions_prints_no_proposed_line]
+  }
+  requirement PROOF-006-R3 (EARS) {
+    text: "WHEN the cockpit shows the headline and at least one decision is proposed THEN it SHALL add the proposed count after the percentage, and WHEN it lists a proposed decision THEN it SHALL show its state as dim text without the mark of a counted decision"
+    layers: [unit]
+    scenarios: [tui_headline_notes_the_proposed_count, tui_spec_list_marks_a_proposed_decision_apart]
+  }
+  scenario proposed_decisions_are_counted_apart {
+    given: "an accepted decision that fails, two proposed decisions (one proven, one partial) and a rejected one"
+    when: "the rollup is computed"
+    then: "the headline is 0 of 1, the proposed count is 2, and the two proposed decisions are listed apart with their own states"
+    # delegates: decispec-gate coverage::tests::proposed_decisions_are_counted_apart
+  }
+  scenario coverage_lists_proposed_apart {
+    given: "a gate report with three counted decisions and two proposed ones"
+    when: "decispec coverage renders"
+    then: "the headline still reads 1/3 (33%), a line `proposed: 2 decisions, not counted` follows, and the proposed ids carry their state with no proof mark"
+    # delegates: decispec (cli) tests::coverage_lists_proposed_apart
+  }
+  scenario coverage_without_proposed_decisions_prints_no_proposed_line {
+    given: "a gate report with no proposed decision"
+    when: "decispec coverage renders"
+    then: "no proposed line is printed"
+    # delegates: decispec (cli) tests::coverage_without_proposed_decisions_prints_no_proposed_line
+  }
+  scenario tui_headline_notes_the_proposed_count {
+    given: "a coverage of 54 proven of 68 accepted decisions and 6 proposed ones"
+    when: "the cockpit headline is written"
+    then: "it reads 54/68 decisions proven (79%) · +6 proposed, and without proposed decisions it has no suffix"
+    # delegates: decispec-tui views::tests::tui_headline_notes_the_proposed_count
+  }
+  scenario tui_spec_list_marks_a_proposed_decision_apart {
+    given: "a proposed decision whose rows are partly passing"
+    when: "the spec list renders its mark column"
+    then: "it shows the state as dim text beginning with a dot, never a proof symbol"
+    # delegates: decispec-tui views::tests::tui_spec_list_marks_a_proposed_decision_apart
   }
 }

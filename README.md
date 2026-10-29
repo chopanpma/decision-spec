@@ -276,8 +276,9 @@ ratchet cannot be read, so the gate could not run.
 The gate summary ends with a proof-coverage line, `coverage: N/M decisions
 proven (P%)`: a decision is **proven** only when every gatable row mapped to
 it passed, **partial** when at least one row passed and at least one did not
-(a `SKIPPED` row is never proof), and superseded/rejected decisions never
-count. The same rollup backs `decispec coverage` (above), so the two surfaces
+(a `SKIPPED` row is never proof), and only accepted decisions count: a
+`proposed` decision is listed apart (`proposed: K decisions, not counted`), and
+superseded/rejected decisions never count. The same rollup backs `decispec coverage` (above), so the two surfaces
 always agree.
 
 ## decispec.toml
