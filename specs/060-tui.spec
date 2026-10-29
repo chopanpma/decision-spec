@@ -638,3 +638,46 @@ spec TUI-009 {
     # delegates: decispec (cli) tests::tui_falls_back_to_registry_outside_a_project
   }
 }
+
+decision TUI-010 "The cockpit shows the proven percentage for each project, rounded to the nearest percent" {
+  status: accepted
+  context: "User request 2026-10-29: the percentage of proven decisions showed only on the dashboard view, and as a floored value (54/74 printed 72%). A project list that hides it makes the main number of the product one tab away, and 72.97 read as 72 understates the work."
+  consequences: "+ the number is visible on the first screen, beside each project. + the shown value is the nearest percent, so 54/74 reads 73%. - the TUI can show 73% while `decispec coverage --min-percent` still compares the floored 72, because the floor must never loosen; the two differ by less than one point."
+}
+
+spec TUI-010 {
+  requirement TUI-010-R1 (EARS) {
+    text: "WHEN a project has a gate report THEN the project list SHALL show its proven-decision percent beside its name, and WHEN it has none THEN it SHALL show no percent"
+    layers: [unit]
+    scenarios: [tui_sidebar_shows_each_projects_proven_percent, tui_sidebar_shows_no_percent_without_a_gate_run]
+  }
+  requirement TUI-010-R2 (EARS) {
+    text: "WHEN the cockpit shows a proven percent THEN it SHALL round to the nearest whole percent, half up, and the floored percent used for the --min-percent floor SHALL NOT change"
+    layers: [unit]
+    scenarios: [tui_headline_uses_the_nearest_percent, percent_nearest_rounds_half_up_and_keeps_the_floored_percent]
+  }
+  scenario tui_sidebar_shows_each_projects_proven_percent {
+    given: "a project whose gate report proves 1 of 3 decisions"
+    when: "the cockpit renders"
+    then: "the project row in the list carries 33%"
+    # delegates: decispec-tui views::tests::tui_sidebar_shows_each_projects_proven_percent
+  }
+  scenario tui_sidebar_shows_no_percent_without_a_gate_run {
+    given: "a project with no gate report"
+    when: "the cockpit renders"
+    then: "the project row carries no percent and no invented zero"
+    # delegates: decispec-tui views::tests::tui_sidebar_shows_no_percent_without_a_gate_run
+  }
+  scenario tui_headline_uses_the_nearest_percent {
+    given: "a coverage of 54 proven decisions out of 74"
+    when: "the headline is written"
+    then: "it reads 54/74 decisions proven (73%)"
+    # delegates: decispec-tui views::tests::tui_headline_uses_the_nearest_percent
+  }
+  scenario percent_nearest_rounds_half_up_and_keeps_the_floored_percent {
+    given: "coverages of 54/74, 1/3, 1/8, 0/0, 5/5 and 199/200"
+    when: "the nearest percent is computed"
+    then: "it is 73, 33, 13, 0, 100 and 100, and the floored percent of 54/74 is still 72"
+    # delegates: decispec-gate coverage::tests::percent_nearest_rounds_half_up_and_keeps_the_floored_percent
+  }
+}

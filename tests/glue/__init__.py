@@ -1219,3 +1219,22 @@ def every_rust_test_pinned_exactly_once():
         glue_source = f.read()
     problems = pin_audit.audit_pins(enumerated, pin_audit.extract_pins(glue_source))
     assert not problems, "pin self-check failed:\n" + "\n".join(problems)
+
+
+# --- specs/060-tui.spec TUI-010: the proven percentage in the cockpit ---------
+
+
+def tui_sidebar_shows_each_projects_proven_percent():
+    _delegate("decispec-tui", "views::tests::tui_sidebar_shows_each_projects_proven_percent")
+
+
+def tui_sidebar_shows_no_percent_without_a_gate_run():
+    _delegate("decispec-tui", "views::tests::tui_sidebar_shows_no_percent_without_a_gate_run")
+
+
+def tui_headline_uses_the_nearest_percent():
+    _delegate("decispec-tui", "views::tests::tui_headline_uses_the_nearest_percent")
+
+
+def percent_nearest_rounds_half_up_and_keeps_the_floored_percent():
+    _delegate("decispec-gate", "coverage::tests::percent_nearest_rounds_half_up_and_keeps_the_floored_percent")
