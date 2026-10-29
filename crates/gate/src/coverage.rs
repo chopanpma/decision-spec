@@ -58,6 +58,17 @@ pub struct Coverage {
     pub decisions: Vec<DecisionCoverage>,
 }
 
+impl Coverage {
+    /// `proven * 100 / gatable`, rounded to the nearest whole percent (half up).
+    /// For display only: `percent` stays floored, so a `--min-percent` floor never loosens.
+    pub fn percent_nearest(&self) -> usize {
+        if self.gatable == 0 {
+            return 0;
+        }
+        (self.proven * 200 + self.gatable) / (self.gatable * 2)
+    }
+}
+
 /// One decision's evidence: its declared status plus the counts needed by the
 /// proof rule. Carrying counts (not row references) lets cli and tui each map
 /// their own report representation into evidence without sharing row types.
@@ -128,6 +139,27 @@ impl GateReport {
 mod tests {
     use super::*;
     use crate::{GateCounts, Verdict};
+
+    fn cov_of(proven: usize, gatable: usize) -> Coverage {
+        Coverage {
+            proven,
+            gatable,
+            percent: proven.checked_mul(100).and_then(|x| x.checked_div(gatable)).unwrap_or(0),
+            decisions: vec![],
+        }
+    }
+
+    #[test]
+    fn percent_nearest_rounds_half_up_and_keeps_the_floored_percent() {
+        // 54/74 is 72.97: the floored `percent` stays 72 for the CI floor, the shown value is 73.
+        let c = cov_of(54, 74);
+        assert_eq!((c.percent, c.percent_nearest()), (72, 73));
+        assert_eq!(cov_of(1, 3).percent_nearest(), 33);
+        assert_eq!(cov_of(1, 8).percent_nearest(), 13, "12.5 rounds up");
+        assert_eq!(cov_of(0, 0).percent_nearest(), 0);
+        assert_eq!(cov_of(5, 5).percent_nearest(), 100);
+        assert_eq!(cov_of(199, 200).percent_nearest(), 100, "99.5 rounds up");
+    }
 
     fn ev<'a>(id: &'a str, status: Status, rows: &'a [RowResult]) -> DecisionEvidence<'a> {
         DecisionEvidence {

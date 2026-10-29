@@ -74,6 +74,11 @@ fn headline_style(cov: &Coverage) -> Style {
     }
 }
 
+/// `N/M decisions proven (P%)`, with P rounded to the nearest percent.
+fn headline_text(cov: &Coverage) -> String {
+    format!("{}/{} decisions proven ({}%)", cov.proven, cov.gatable, cov.percent_nearest())
+}
+
 fn truncate(s: &str, max: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
     if chars.len() <= max {
@@ -134,8 +139,16 @@ fn render_sidebar(app: &App, frame: &mut Frame, area: Rect) {
             } else {
                 Style::default()
             };
+            let percent = match &p.coverage {
+                Some(cov) => Span::styled(
+                    format!(" {}%", cov.percent_nearest()),
+                    headline_style(cov),
+                ),
+                None => Span::raw(""),
+            };
             ListItem::new(Line::from(vec![
-                Span::styled(truncate(&p.name, 18), style),
+                Span::styled(truncate(&p.name, 12), style),
+                percent,
                 badge,
             ]))
         })
@@ -447,10 +460,7 @@ fn gate_lines(g: &GateSnapshot, cov: &Coverage) -> Vec<Line<'static>> {
         Line::from(vec![
             Span::raw("coverage: "),
             Span::styled(
-                format!(
-                    "{}/{} decisions proven ({}%)",
-                    cov.proven, cov.gatable, cov.percent
-                ),
+                headline_text(cov),
                 headline_style(cov),
             ),
         ]),
@@ -1018,6 +1028,33 @@ spec AUTH-001 {
                 .any(|l| l.contains("AUTH-001") && l.contains("✓ proven")),
             "text:\n{text}"
         );
+    }
+
+    #[test]
+    fn tui_sidebar_shows_each_projects_proven_percent() {
+        let app = App::new(proof_projects(Some(proof_gate())));
+        let text = render_text(&app, 140, 40);
+        // 1 of 3 decisions proven: the project row in the sidebar carries 33%.
+        assert!(
+            text.lines().any(|l| l.contains("demo") && l.contains("33%")),
+            "text:\n{text}"
+        );
+    }
+
+    #[test]
+    fn tui_sidebar_shows_no_percent_without_a_gate_run() {
+        let app = App::new(proof_projects(None));
+        let text = render_text(&app, 140, 40);
+        assert!(
+            !text.lines().any(|l| l.contains("demo") && l.contains('%')),
+            "text:\n{text}"
+        );
+    }
+
+    #[test]
+    fn tui_headline_uses_the_nearest_percent() {
+        let cov = Coverage { proven: 54, gatable: 74, percent: 72, decisions: vec![] };
+        assert_eq!(headline_text(&cov), "54/74 decisions proven (73%)");
     }
 
     #[test]
